@@ -16,7 +16,7 @@ zum eigenen Profil passen.
 
 ```mermaid
 flowchart LR
-    A[jobspy-mcp-server<br/>Indeed/LinkedIn/Glassdoor] -->|MCP| B[Search Node]
+    A[Eigener jobspy MCP-Server<br/>(python-jobspy)] -->|MCP| B[Search Node]
     B --> C[Filter Node<br/>regelbasiert]
     C --> D[Bewertungs Node<br/>Claude Haiku]
     D --> E[(PostgreSQL<br/>+ pgvector)]
@@ -49,4 +49,27 @@ Python 3.11 · LangGraph · Anthropic Claude (Haiku) · FastAPI · PostgreSQL
 
 ## Setup
 
-_Folgt, sobald der erste lauffähige Stand steht (siehe Issue #2)._
+Voraussetzungen: Python 3.11 (via pyenv)
+
+```bash
+git clone https://github.com/pandashhh/job-search-agent.git
+cd job-search-agent
+pyenv local 3.11.3
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### jobspy MCP-Server (Datenquelle)
+
+Eigener FastMCP-Server um die python-jobspy-Bibliothek (läuft als
+Python-Prozess über stdio, kein Docker nötig):
+
+```bash
+python mcp_servers/jobspy_server/server.py
+```
+
+Manueller Verbindungstest mit einer echten Suchanfrage:
+```bash
+python tests/manual/jobspy_client_check.py
+```
