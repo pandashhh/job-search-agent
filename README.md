@@ -16,7 +16,7 @@ zum eigenen Profil passen.
 
 ```mermaid
 flowchart LR
-    A[Eigener jobspy MCP-Server<br/>(python-jobspy)] -->|MCP| B[Search Node]
+    A["Eigener jobspy MCP-Server<br/>(python-jobspy)"] -->|MCP| B[Search Node]
     B --> C[Filter Node<br/>regelbasiert]
     C --> D[Bewertungs Node<br/>Claude Haiku]
     D --> E[(PostgreSQL<br/>+ pgvector)]
