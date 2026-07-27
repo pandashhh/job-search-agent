@@ -1,0 +1,3 @@
+# Nur für Entwicklung/Tests — nicht in Produktion nötig
+pytest>=9.1
+pytest-asyncio>=1.4
