@@ -4,6 +4,8 @@ KI-Agent, der Jobportale durchsucht, Ergebnisse filtert und nach Passung
 zum eigenen Profil bewertet — von der Suche bis zum durchsuchbaren
 Dashboard.
 
+![CI](https://github.com/pandashhh/job-search-agent/actions/workflows/ci.yml/badge.svg)
+
 ## Warum dieses Projekt
 
 Klassische Jobsuche bedeutet: dieselben Suchbegriffe auf mehreren Portalen
