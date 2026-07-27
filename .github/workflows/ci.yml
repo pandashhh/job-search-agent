@@ -1,0 +1,36 @@
+# CI-Pipeline: läuft bei jedem Push auf main und bei jedem Pull Request
+name: CI
+
+on:
+  # Push direkt auf main (z.B. nach Merge eines PR)
+  push:
+    branches: [main]
+  # PRs gegen beliebige Branches — fängt Fehler VOR dem Merge ab
+  pull_request:
+
+jobs:
+  test:
+    # GitHub-gehosteter Ubuntu-Runner (aktuellste LTS)
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout des Repos in den Runner-Workspace
+      - name: Code auschecken
+        uses: actions/checkout@v4
+
+      # Python 3.11 installieren — muss zur pyenv-Version lokal passen (3.11.3)
+      - name: Python 3.11 einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          # pip-Cache aktivieren, damit Runs schneller werden
+          cache: pip
+
+      # Runtime- + Dev-Abhängigkeiten installieren (Dev enthält pytest)
+      - name: Abhängigkeiten installieren
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      # Testsuite ausführen; -v zeigt jeden Testnamen einzeln im Log
+      - name: Tests ausführen
+        run: pytest tests/ -v

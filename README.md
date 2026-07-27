@@ -4,6 +4,8 @@ KI-Agent, der Jobportale durchsucht, Ergebnisse filtert und nach Passung
 zum eigenen Profil bewertet — von der Suche bis zum durchsuchbaren
 Dashboard.
 
+![CI](https://github.com/pandashhh/job-search-agent/actions/workflows/ci.yml/badge.svg)
+
 ## Warum dieses Projekt
 
 Klassische Jobsuche bedeutet: dieselben Suchbegriffe auf mehreren Portalen
@@ -58,6 +60,7 @@ pyenv local 3.11.3
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+pip install -r requirements-dev.txt  # nur für Entwicklung/Tests
 ```
 
 ### jobspy MCP-Server (Datenquelle)
