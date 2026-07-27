@@ -8,16 +8,64 @@ leere Listen durch die restlichen Nodes (jeder Node behandelt sie als No-op).
 from langgraph.constants import END, START
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
+
+from src.agent.models import Job
 from src.agent.state import AgentState
+from src.mcp_client.jobspy_client import search_jobs_via_mcp
 
 
 async def search_node(state: AgentState) -> dict:
-    """Startet den jobspy-MCP-Server und ruft search_jobs() auf.
+    """Ruft den jobspy-MCP-Server auf und mappt die Ergebnisse auf Job-Objekte.
 
-    TODO (#6): MCP-Client aus src/mcp_client/jobspy_client.py nutzen,
-    Ergebnisse als list[Job] in raw_jobs schreiben.
+    Fehlerbehandlung auf zwei Ebenen:
+    - Komplettausfall (Server nicht erreichbar, RuntimeError): kein raw_jobs
+      im Rückgabe-Dict, Fehler landet in errors.
+    - Einzelner kaputter Job-Dict: dieser Job wird übersprungen, die
+      restlichen Jobs werden trotzdem verarbeitet.
     """
-    return {}
+    mapping_errors: list[str] = []
+
+    try:
+        raw_dicts = await search_jobs_via_mcp(
+            search_term=state["search_term"],
+            location=state["location"],
+        )
+    except Exception as e:
+        # Kein raw_jobs im Rückgabe-Dict — LangGraph lässt den bestehenden
+        # State-Wert unverändert, wenn ein Key fehlt
+        return {"errors": state["errors"] + [f"Search-Node: {e}"]}
+
+    jobs: list[Job] = []
+    for raw in raw_dicts:
+        try:
+            # Explizites Mapping nötig: JobSpy nennt das Feld "id",
+            # unser Modell "external_id" — **raw würde crashen
+            job = Job(
+                external_id=raw["id"],
+                title=raw["title"],
+                company=raw["company"],
+                location=raw["location"],
+                job_url=raw["job_url"],
+                description=raw["description"],
+                is_remote=raw["is_remote"],
+                site=raw["site"],
+                # Optionale Felder: .get() mit None-Default, da JobSpy
+                # diese Felder häufig weglässt (siehe docs/jobspy-notes.md)
+                job_type=raw.get("job_type"),
+                date_posted=raw.get("date_posted"),
+                min_amount=raw.get("min_amount"),
+                max_amount=raw.get("max_amount"),
+            )
+            jobs.append(job)
+        except Exception as e:
+            # Einen kaputten Eintrag überspringen, nicht den ganzen Lauf stoppen
+            job_id = raw.get("id", "<unbekannt>")
+            mapping_errors.append(f"Search-Node: Job '{job_id}' übersprungen: {e}")
+
+    result: dict = {"raw_jobs": jobs}
+    if mapping_errors:
+        result["errors"] = state["errors"] + mapping_errors
+    return result
 
 
 async def filter_node(state: AgentState) -> dict:

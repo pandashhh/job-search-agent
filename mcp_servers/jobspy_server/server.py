@@ -1,7 +1,11 @@
+import json
+import logging
 from typing import Optional
 
 from fastmcp import FastMCP
 from jobspy import scrape_jobs
+
+logger = logging.getLogger(__name__)
 
 # MCP-Server-Instanz
 mcp = FastMCP("jobspy")
@@ -28,15 +32,22 @@ def search_jobs(
     (z.B. "Germany" → indeed.de, "USA" → indeed.com). Der location-Parameter
     grenzt nur innerhalb dieses Landes ein — er bestimmt nicht das Land selbst.
     """
-    df = scrape_jobs(
-        site_name=site_names,
-        search_term=search_term,
-        location=location,
-        results_wanted=results_wanted,
-        job_type=job_type,
-        is_remote=is_remote,
-        country_indeed=country_indeed,
-    )
+    try:
+        df = scrape_jobs(
+            site_name=site_names,
+            search_term=search_term,
+            location=location,
+            results_wanted=results_wanted,
+            job_type=job_type,
+            is_remote=is_remote,
+            country_indeed=country_indeed,
+        )
+    except Exception as e:
+        # Stacktrace ins Log schreiben, damit die Ursache nachvollziehbar bleibt.
+        # JobSpys interne Fehlerklassen sind nicht öffentlich dokumentiert,
+        # daher kein spezifischeres except möglich.
+        logger.exception("scrape_jobs() hat eine Exception geworfen")
+        return json.dumps({"error": str(e)})
 
     # Leere Ergebnisse sauber abfangen
     if df is None or df.empty:

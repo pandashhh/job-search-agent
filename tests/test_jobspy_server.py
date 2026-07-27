@@ -121,3 +121,22 @@ def test_search_jobs_mit_none_gibt_leeres_json_array_zurueck() -> None:
         )
 
     assert result == "[]"
+
+
+def test_search_jobs_bei_exception_gibt_fehler_json_zurueck() -> None:
+    """
+    Fehlerfall: scrape_jobs() wirft eine Exception (z.B. Netzwerkfehler,
+    Rate-Limit, kaputte HTML-Antwort von Indeed).
+    search_jobs() soll nicht crashen, sondern {"error": "..."} als
+    JSON-String zurückgeben — der MCP-Client kann den Fehler dann
+    auswerten, ohne dass der Server-Prozess abstürzt.
+    """
+    with patch(PATCH_TARGET, side_effect=RuntimeError("Verbindung fehlgeschlagen")):
+        result = search_jobs(
+            search_term="Junior AI Engineer",
+            location="Hamburg",
+        )
+
+    fehler = json.loads(result)
+    assert "error" in fehler
+    assert "Verbindung fehlgeschlagen" in fehler["error"]
