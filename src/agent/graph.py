@@ -5,13 +5,16 @@ Strikt linear, keine Conditional Edges — leere Ergebnisse laufen als
 leere Listen durch die restlichen Nodes (jeder Node behandelt sie als No-op).
 """
 
+from langchain_anthropic import ChatAnthropic
 from langgraph.constants import END, START
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from src.agent.evaluation import build_system_prompt, load_profile
 from src.agent.filters import filter_job, load_filter_rules
-from src.agent.models import Job, RejectedJob
+from src.agent.models import EvaluatedJob, Job, JobEvaluation, RejectedJob
 from src.agent.state import AgentState
+from src.config import settings
 from src.mcp_client.jobspy_client import search_jobs_via_mcp
 
 
@@ -103,11 +106,69 @@ async def filter_node(state: AgentState) -> dict:
 async def evaluate_node(state: AgentState) -> dict:
     """Bewertet jeden gefilterten Job via Claude Haiku (Structured Output).
 
-    TODO (#8): ChatAnthropic(...).with_structured_output(JobEvaluation) nutzen,
-    Profil aus data/profile.yaml laden, sequenziell über filtered_jobs iterieren,
-    Ergebnisse als list[EvaluatedJob] in evaluated_jobs schreiben.
+    Ablauf:
+    1. Bei leerem filtered_jobs sofort raus — kein API-Call, spart Kosten
+    2. Profil einmal laden, System-Prompt einmal bauen (nicht pro Job)
+    3. ChatAnthropic mit with_structured_output(JobEvaluation) — erzwingt,
+       dass das Modell exakt unser Pydantic-Schema zurückgibt
+    4. SEQUENZIELL über filtered_jobs iterieren (m2-design.md: keine
+       Parallelisierung im ersten Wurf; asyncio.gather+Semaphore kommt später)
+    5. Pro Job: bei API-Fehler den Job überspringen, Fehler in errors
+       sammeln, restliche Jobs trotzdem bewerten (kein Alles-oder-Nichts)
     """
-    return {}
+    # Kurzschluss: keine Eingabe -> keine Ausgabe, kein API-Call
+    if not state["filtered_jobs"]:
+        return {"evaluated_jobs": []}
+
+    profile = load_profile()
+    system_prompt = build_system_prompt(profile)
+
+    # with_structured_output bindet das Pydantic-Schema an das Modell.
+    # Rückgabe von ainvoke() ist dann direkt eine JobEvaluation-Instanz.
+    chat = ChatAnthropic(model=settings.evaluation_model,anthropic_api_key=settings.anthropic_api_key,)
+    chain = chat.with_structured_output(JobEvaluation)
+
+    evaluated_jobs: list[EvaluatedJob] = []
+    new_errors: list[str] = []
+
+    for job in state["filtered_jobs"]:
+        # Beschreibung als Guard gegen Ausreißer-Anzeigen kürzen —
+        # 8000 Zeichen (Default) reichen für 99% der Anzeigen
+        description = job.description[: settings.max_description_chars]
+
+        # User-Message wortwörtlich strukturiert, damit das Modell die
+        # Felder klar unterscheiden kann (nicht als JSON-Blob mit
+        # Escaping-Risiko)
+        user_message = (
+            f"Title: {job.title}\n"
+            f"Company: {job.company}\n"
+            f"Location: {job.location}\n"
+            f"Job Type: {job.job_type or 'nicht angegeben'}\n"
+            f"Remote: {'ja' if job.is_remote else 'nein'}\n"
+            f"\n"
+            f"Description:\n{description}"
+        )
+
+        try:
+            evaluation = await chain.ainvoke(
+                [
+                    ("system", system_prompt),
+                    ("human", user_message),
+                ]
+            )
+            evaluated_jobs.append(EvaluatedJob(job=job, evaluation=evaluation))
+        except Exception as e:
+            # Einen kaputten Bewertungs-Call überspringen, nicht den
+            # ganzen Node stoppen — die anderen Jobs sollen trotzdem
+            # bewertet werden
+            new_errors.append(
+                f"Evaluate-Node: Job '{job.external_id}' übersprungen: {e}"
+            )
+
+    result: dict = {"evaluated_jobs": evaluated_jobs}
+    if new_errors:
+        result["errors"] = state["errors"] + new_errors
+    return result
 
 
 async def store_node(state: AgentState) -> dict:

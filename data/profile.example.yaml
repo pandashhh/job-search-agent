@@ -1,0 +1,21 @@
+name: "Dein Name"
+role_gesucht: "z.B. Junior AI Engineer"
+
+erfahrung:
+  - "z.B. B.Sc. Informatik, Universität XY"
+  - "z.B. 2 Jahre Berufserfahrung als ..."
+
+zertifikate:
+  - "z.B. relevante Zertifizierungen"
+
+kernskills:
+  - "z.B. Python, LangChain, FastAPI"
+
+portfolio_projekte:
+  - "z.B. Kurzbeschreibung eines Projekts"
+
+praeferenzen:
+  level: "z.B. Junior, Mid-Level, Senior"
+  standort: "z.B. Stadt oder Remote"
+  ausschluss: "z.B. kein Consulting"
+  fokus: "z.B. bevorzugte Fachrichtung"
