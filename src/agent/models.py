@@ -58,6 +58,30 @@ class FilterRules(BaseModel):
     description_blacklist: list[str]
 
 
+class Profile(BaseModel):
+    """Profil des Jobsuchenden, geladen aus data/profile.yaml.
+
+    Wird in den System-Prompt des Bewertungs-Nodes eingebettet, damit
+    Claude Haiku Jobs anhand konkreter Kandidaten-Daten (Skills, Level,
+    Präferenzen) bewerten kann statt generisch.
+    """
+
+    name: str
+    # Rollen-Bezeichnung, nach der aktiv gesucht wird (z.B. "Junior AI Engineer")
+    role_gesucht: str
+    # Bildungs- und Berufserfahrung als lose Liste (Freitext-Zeilen)
+    erfahrung: list[str]
+    # Relevante Zertifizierungen (Anbieter + Kurs)
+    zertifikate: list[str]
+    # Technische Kernkompetenzen — direkte Basis für matched_skills im LLM-Output
+    kernskills: list[str]
+    # Portfolio-Projekte (Kurzbeschreibungen) — belegen Praxis-Erfahrung
+    portfolio_projekte: list[str]
+    # Freies Mapping für Level/Standort/Ausschluss/Fokus — bewusst dict[str, str],
+    # damit neue Präferenz-Schlüssel ohne Modell-Änderung ergänzt werden können
+    praeferenzen: dict[str, str]
+
+
 class JobEvaluation(BaseModel):
     """Bewertungsergebnis eines Jobs durch Claude Haiku.
 

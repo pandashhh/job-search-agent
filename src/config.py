@@ -5,7 +5,7 @@ eingebaut). Singleton-Instanz `settings` am Ende des Moduls — überall
 importierbar ohne die Klasse neu zu instanziieren.
 """
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -27,10 +27,15 @@ class Settings(BaseSettings):
     # Profil des Jobsuchenden — NICHT committed (enthält persönliche Daten)
     profile_path: str = "data/profile.yaml"
 
-    class Config:
-        # .env-Datei im Arbeitsverzeichnis laden
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    # Obergrenze für Job-Beschreibungen im LLM-Prompt (Zeichen, nicht Tokens).
+    # Schutz-Guard gegen Ausreißer-Anzeigen; 8000 Zeichen ~ 2000 Tokens,
+    # bei Haiku vernachlässigbar teuer.
+    max_description_chars: int = 8000
+
+    # Pydantic-v2-Stil: model_config als Klassenattribut statt verschachtelter
+    # class Config. SettingsConfigDict ist der spezialisierte TypedDict-Wrapper
+    # von pydantic-settings (statt des generischen ConfigDict aus pydantic).
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
 # Singleton — einmal laden, überall wiederverwenden
