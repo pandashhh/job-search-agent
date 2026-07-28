@@ -1,0 +1,24 @@
+# Regelwerk für den Filter-Node — wird über load_filter_rules() geladen und
+# gegen das Pydantic-Modell FilterRules validiert. Später (M3) kommen diese
+# Regeln aus der DB-Tabelle filter_rules; das Format bleibt gleich.
+
+# Titel, die zu einer Ablehnung führen (case-insensitive Substring-Match)
+title_blacklist:
+  - Senior
+  - Lead
+  - Principal
+  - Staff
+  - Head of
+  - Architekt
+  - Consultant
+  - Berater
+  - Werkstudent
+  - Praktikum
+
+# Obergrenze Berufserfahrung in Jahren — höhere Angaben im Text = Ablehnung
+max_experience_years: 3
+
+# Beschreibungs-Phrasen, die zu einer Ablehnung führen (case-insensitive)
+description_blacklist:
+  - Beratungsprojekte
+  - Kundenprojekte vor Ort

@@ -9,7 +9,8 @@ from langgraph.constants import END, START
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from src.agent.models import Job
+from src.agent.filters import filter_job, load_filter_rules
+from src.agent.models import Job, RejectedJob
 from src.agent.state import AgentState
 from src.mcp_client.jobspy_client import search_jobs_via_mcp
 
@@ -71,11 +72,32 @@ async def search_node(state: AgentState) -> dict:
 async def filter_node(state: AgentState) -> dict:
     """Wendet Filterregeln aus data/filter_rules.yaml auf raw_jobs an.
 
-    TODO (#7): load_filter_rules() implementieren, title_blacklist und
-    max_experience_years-Regex gegen title/description prüfen,
-    gefilterte Jobs in filtered_jobs, aussortierte in rejected_jobs schreiben.
+    Ablauf:
+    1. Regeln einmal pro Node-Aufruf laden (nicht pro Job — spart I/O)
+    2. Über raw_jobs iterieren, filter_job() als Entscheider aufrufen
+    3. Bei None: Job durchgelassen -> filtered_jobs
+       Bei Grund: Job in RejectedJob mit rejection_reason verpacken
+
+    Leerer raw_jobs-State ist explizit erlaubt (Search-Node kann bei
+    einem Fehler ohne Ergebnisse ankommen) — die Schleife läuft dann
+    einfach nicht, beide Listen bleiben leer, kein Fehler.
     """
-    return {}
+    # Regeln einmal laden — später (M3) könnten hier DB-Regeln kommen
+    rules = load_filter_rules()
+
+    filtered_jobs: list[Job] = []
+    rejected_jobs: list[RejectedJob] = []
+
+    for job in state["raw_jobs"]:
+        reason = filter_job(job, rules)
+        if reason is None:
+            # Kein Ablehnungsgrund gefunden -> Job besteht den Filter
+            filtered_jobs.append(job)
+        else:
+            # Grund vorhanden -> Job mit Begründung verpacken
+            rejected_jobs.append(RejectedJob(job=job, rejection_reason=reason))
+
+    return {"filtered_jobs": filtered_jobs, "rejected_jobs": rejected_jobs}
 
 
 async def evaluate_node(state: AgentState) -> dict:
