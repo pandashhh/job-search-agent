@@ -1,0 +1,31 @@
+name: "Sung-Hack Hong"
+role_gesucht: "Junior AI Engineer"
+
+erfahrung:
+  - "B.Sc. Angewandte Informatik, HAW Hamburg (duales Studium)"
+  - "2 Jahre Salesforce Developer"
+  - "6 Monate AI Engineering Bootcamp, neuefische (Sep 2025 - Mar 2026)"
+
+zertifikate:
+  - "Anthropic: Claude API, Claude Code 101, Agent Skills"
+
+kernskills:
+  - "Python (Type Hints, async/await, Pydantic, dataclasses, pytest)"
+  - "Anthropic SDK (Claude API, Structured Output, Tool Use)"
+  - "LangChain, LangGraph (Multi-Agent-Systeme, StateGraph)"
+  - "LlamaIndex, ChromaDB (RAG-Systeme, Embeddings)"
+  - "FastAPI, uvicorn, httpx"
+  - "MCP: FastMCP, stdio Transport, eigene Server UND Clients gebaut"
+  - "Docker, docker-compose, GitHub Actions CI/CD"
+
+portfolio_projekte:
+  - "RAG-System über technische Doku (LlamaIndex, ChromaDB, Docker-optimiert 9GB->2GB)"
+  - "Multi-Agent Research System (LangGraph, Koordinator+Sub-Agenten)"
+  - "MCP-Server für RAG-Tools (FastMCP, Claude Desktop Integration)"
+  - "Dieser Job-Search-Agent selbst (LangGraph, MCP-Client+Server, FastMCP)"
+
+praeferenzen:
+  level: "ausschliesslich Junior/Entry-Level, KEINE Senior/Lead-Anforderungen"
+  standort: "Hamburg oder vollständig Remote"
+  ausschluss: "Kein Consulting mit Kundenreisen"
+  fokus: "LLMs, RAG, agentische KI-Systeme bevorzugt"
