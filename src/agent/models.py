@@ -42,6 +42,22 @@ class RejectedJob(BaseModel):
     rejection_reason: str
 
 
+class FilterRules(BaseModel):
+    """Regelwerk für den Filter-Node, geladen aus data/filter_rules.yaml.
+
+    Wird via load_filter_rules() gelesen und validiert Pydantic-seitig,
+    damit fehlende/falsch getippte Felder in der YAML sofort einen Fehler
+    werfen statt später einen KeyError im Node zu produzieren.
+    """
+
+    # Titel-Bausteine, die zur Ablehnung führen (case-insensitive Substring)
+    title_blacklist: list[str]
+    # Obergrenze Berufserfahrung — höhere Angaben im Text = Ablehnung
+    max_experience_years: int
+    # Beschreibungs-Phrasen, die zur Ablehnung führen (case-insensitive)
+    description_blacklist: list[str]
+
+
 class JobEvaluation(BaseModel):
     """Bewertungsergebnis eines Jobs durch Claude Haiku.
 

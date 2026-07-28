@@ -15,3 +15,6 @@ langchain-anthropic>=1.4
 # Konfiguration (BaseSettings) und Datenmodelle (BaseModel)
 pydantic>=2.13
 pydantic-settings>=2.14
+
+# YAML-Parser für data/filter_rules.yaml und data/profile.yaml
+pyyaml>=6.0
