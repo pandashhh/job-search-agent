@@ -10,9 +10,10 @@ from pathlib import Path
 import yaml
 
 from src.agent.models import Profile
+from src.config import settings
 
 
-def load_profile(path: str = "data/profile.yaml") -> Profile:
+def load_profile(path: str = settings.profile_path) -> Profile:
     """Lädt und validiert das Kandidaten-Profil aus einer YAML-Datei.
 
     Analog zu load_filter_rules() in filters.py — gleicher Vertrag,

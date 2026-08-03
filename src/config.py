@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # bei Haiku vernachlässigbar teuer.
     max_description_chars: int = 8000
 
+    # Zielverzeichnis für die JSON-Ergebnisdateien des Storage-Nodes.
+    # Über Settings konfigurierbar, damit Tests via monkeypatch auf tmp_path
+    # umleiten können, ohne das echte data/results/ vollzuschreiben.
+    results_dir: str = "data/results"
+
     # Pydantic-v2-Stil: model_config als Klassenattribut statt verschachtelter
     # class Config. SettingsConfigDict ist der spezialisierte TypedDict-Wrapper
     # von pydantic-settings (statt des generischen ConfigDict aus pydantic).
