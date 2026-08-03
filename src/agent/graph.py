@@ -5,6 +5,10 @@ Strikt linear, keine Conditional Edges — leere Ergebnisse laufen als
 leere Listen durch die restlichen Nodes (jeder Node behandelt sie als No-op).
 """
 
+import json
+from datetime import datetime
+from pathlib import Path
+
 from langchain_anthropic import ChatAnthropic
 from langgraph.constants import END, START
 from langgraph.graph import StateGraph
@@ -172,13 +176,50 @@ async def evaluate_node(state: AgentState) -> dict:
 
 
 async def store_node(state: AgentState) -> dict:
-    """Schreibt evaluated_jobs als JSON nach data/results/{timestamp}.json.
+    """Schreibt evaluated_jobs als JSON nach {results_dir}/{timestamp}.json.
 
-    TODO (#8 Stub / #9): store_results() implementieren. Interface bleibt
-    erhalten — in M3 wird die Implementierung auf Postgres umgestellt,
-    ohne dass dieser Node verändert werden muss.
+    Ablauf:
+    1. Zielverzeichnis anlegen (idempotent via mkdir exist_ok=True)
+    2. Timestamp im Format YYYYMMDD_HHMMSS als Dateiname — sortierbar,
+       lexikografische Sortierung = chronologische Sortierung
+    3. Jedes EvaluatedJob über model_dump() (Pydantic v2) in ein dict
+       konvertieren, dann als JSON schreiben (indent=2 lesbar,
+       ensure_ascii=False für Umlaute)
+    4. Auch bei leerer evaluated_jobs-Liste eine Datei schreiben (mit
+       []) — macht Nulltreffer-Läufe genauso nachvollziehbar wie
+       erfolgreiche Läufe
+    5. Bei Schreibfehler (Berechtigung, Disk voll): Fehler in errors
+       statt Crash — gleiche Philosophie wie Search- und Evaluate-Node
+
+    Rückgabe: {} bei Erfolg (Storage ist reiner Seiteneffekt, kein
+    State-Feld wird verändert), {"errors": [...]} bei Fehler.
     """
-    return {}
+    try:
+        # settings.results_dir ist ein String, Path wandelt in Path-Objekt.
+        # parents=True legt auch fehlende Zwischenverzeichnisse an,
+        # exist_ok=True verhindert FileExistsError bei existierendem Ordner
+        results_dir = Path(settings.results_dir)
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+        # strftime-Format: 20260728_143502 -> lexikografisch = chronologisch
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = results_dir / f"{timestamp}.json"
+
+        # model_dump() ist Pydantic-v2-Standard für dict-Konvertierung
+        # (ersetzt das alte .dict()). Verschachtelte Modelle werden
+        # rekursiv serialisiert.
+        data = [ej.model_dump() for ej in state["evaluated_jobs"]]
+
+        # Explizites open() mit encoding="utf-8" — Default hängt vom OS ab
+        # und würde auf Windows Umlaute kaputt schreiben
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        return {}
+    except Exception as e:
+        # Fehler sammeln statt zu crashen, damit der Graph als Ganzes
+        # nicht wegen eines Storage-Problems fehlschlägt
+        return {"errors": state["errors"] + [f"Store-Node: {e}"]}
 
 
 def build_graph() -> CompiledStateGraph:

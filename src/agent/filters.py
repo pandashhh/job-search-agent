@@ -16,6 +16,7 @@ from pathlib import Path
 import yaml
 
 from src.agent.models import FilterRules, Job
+from src.config import settings
 
 # Vorab kompilierte Regex — spart pro-Job-Kompilierung im Hot Path.
 # Match-Beispiele: "5 Jahre", "3+ years", "10 Jahre".
@@ -25,7 +26,7 @@ from src.agent.models import FilterRules, Job
 _EXPERIENCE_PATTERN = re.compile(r"(\d+)\+?\s*(Jahre|years)", re.IGNORECASE)
 
 
-def load_filter_rules(path: str = "data/filter_rules.yaml") -> FilterRules:
+def load_filter_rules(path: str = settings.filter_rules_path) -> FilterRules:
     """Lädt und validiert die Filterregeln aus einer YAML-Datei.
 
     Parameter:
