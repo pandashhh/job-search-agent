@@ -12,6 +12,10 @@ laufen unverändert, auch wenn kein Postgres verfügbar ist.
 
 import os
 
+# Läuft sofort beim Import von conftest.py (vor jeder Test-Collection) —
+# schützt auch Module-Level-Imports von src.config in Testdateien
+os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
+
 import pytest
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -28,9 +32,6 @@ from src.db.models import (  # noqa: F401
     JobORM,
 )
 
-# Läuft sofort beim Import von conftest.py (vor jeder Test-Collection) —
-# schützt auch Module-Level-Imports von src.config in Testdateien
-os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 
 
 @pytest.fixture(autouse=True)
