@@ -18,3 +18,9 @@ pydantic-settings>=2.14
 
 # YAML-Parser für data/filter_rules.yaml und data/profile.yaml
 pyyaml>=6.0
+
+# Datenbank: SQLAlchemy 2.0 ORM, psycopg2-binary als PostgreSQL-Driver,
+# pgvector-Erweiterung für Embedding-Spalten (Ähnlichkeitssuche in M4)
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+pgvector>=0.3.0
