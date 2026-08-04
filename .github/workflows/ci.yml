@@ -13,6 +13,29 @@ jobs:
     # GitHub-gehosteter Ubuntu-Runner (aktuellste LTS)
     runs-on: ubuntu-latest
 
+    # Service-Container: GitHub startet neben dem Job einen Postgres-Container
+    # auf demselben Docker-Netz. Der Job erreicht ihn unter "localhost" bzw.
+    # (bei Container-Jobs) unter dem Service-Namen "postgres". Wir nutzen
+    # das pgvector/pgvector-Image, damit die Vector-Extension bereits
+    # verfügbar ist — offizieller postgres:16 hätte sie nicht.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: job_search_agent
+        ports:
+          # Port auf den Runner-Host mappen, damit "localhost:5432" für uns funktioniert
+          - 5432:5432
+        # Health-Check verhindert, dass wir Tests starten bevor Postgres bereit ist.
+        # GitHub Actions wartet auf "healthy", bevor der erste Step läuft.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       # Checkout des Repos in den Runner-Workspace
       - name: Code auschecken
@@ -31,6 +54,21 @@ jobs:
         run: |
           pip install -r requirements.txt -r requirements-dev.txt
 
-      # Testsuite ausführen; -v zeigt jeden Testnamen einzeln im Log
+      # pgvector-Extension in der Test-DB aktivieren. Das Image bringt
+      # die Binärdateien mit, aber CREATE EXTENSION muss pro Datenbank
+      # einmalig ausgeführt werden — und braucht Superuser-Rechte
+      # (deshalb -U postgres).
+      # PGPASSWORD als env, damit psql nicht interaktiv nach dem Passwort fragt.
+      - name: pgvector-Extension aktivieren
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d job_search_agent -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+      # Testsuite ausführen; -v zeigt jeden Testnamen einzeln im Log.
+      # DATABASE_URL überschreibt den Default aus config.py und zeigt auf
+      # den Service-Container (Standard-Port 5432 wurde oben gemappt).
       - name: Tests ausführen
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/job_search_agent
         run: pytest tests/ -v

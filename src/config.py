@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # Über Settings konfigurierbar, damit Tests via monkeypatch auf tmp_path
     # umleiten können, ohne das echte data/results/ vollzuschreiben.
     results_dir: str = "data/results"
+    # PostgreSQL-Verbindungsstring. Default zeigt auf eine lokale DB ohne
+    # User/Passwort (peer-Auth); in CI und Produktion via DATABASE_URL
+    # aus der Umgebung überschrieben.
+    database_url: str = "postgresql://localhost/job_search_agent"
 
     # Pydantic-v2-Stil: model_config als Klassenattribut statt verschachtelter
     # class Config. SettingsConfigDict ist der spezialisierte TypedDict-Wrapper
