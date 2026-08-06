@@ -24,3 +24,9 @@ pyyaml>=6.0
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
 pgvector>=0.3.0
+
+# Lokale Embedding-Generierung für die pgvector-Ähnlichkeitssuche.
+# BAAI/bge-small-en-v1.5 wird beim ersten Aufruf von HuggingFace geladen
+# (~130 MB) und danach lokal gecacht — keine API-Kosten, kein Netzwerk
+# im Betrieb.
+sentence-transformers>=3.0.0
