@@ -18,7 +18,7 @@ Aufgabe des Aufrufers (Node) — nur der kennt den Batch-Kontext (alle
 Jobs eines Laufs zusammen, nicht Job für Job).
 """
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from src.agent.models import EvaluatedJob, Job, JobEvaluation
 from src.db.models import EvaluationORM, JobORM
@@ -132,13 +132,51 @@ def get_known_external_ids(
 def load_evaluated_job(session: Session, external_id: str) -> EvaluatedJob:
     """Lädt einen zuvor gespeicherten Job samt Evaluation aus der DB.
 
-    Nutzt die back_populates-Relationship aus models.py — auf
-    job_orm.evaluation zuzugreifen löst einen impliziten JOIN aus.
-    Für ein einzelnes Objekt reicht das; falls das später über viele
-    Jobs iteriert, wäre selectinload() angebracht (aktuell nicht nötig).
+    Nutzt die back_populates-Relationship aus models.py —
+    auf job_orm.evaluation zuzugreifen löst eine separate SELECT-Abfrage
+    aus (SQLAlchemys Standard lazy='select', kein JOIN).
+    Für ein einzelnes Objekt reicht das; für viele Jobs bitte
+    load_evaluated_jobs_batch() nutzen (vermeidet N+1).
     """
     job_orm = session.query(JobORM).filter_by(external_id=external_id).one()
     return _orm_to_evaluated_job(job_orm)
+
+
+def load_evaluated_jobs_batch(
+    session: Session, external_ids: list[str]
+) -> dict[str, EvaluatedJob]:
+    """Lädt mehrere Jobs samt Evaluation in EINER Abfrage-Runde.
+
+    Ersetzt N einzelne load_evaluated_job()-Aufrufe (die je 2 Queries
+    brauchen würden — Job holen + separates Nachladen der Evaluation
+    über den lazy-Relationship-Zugriff). Statt bei 50 Dedup-Treffern
+    100 Roundtrips zu machen, sind es hier zwei: ein SELECT auf jobs
+    (IN-Klausel) und ein SELECT auf evaluations (IN-Klausel über die
+    gefundenen job_ids, das ist genau was selectinload macht).
+
+    Gibt ein dict external_id -> EvaluatedJob zurück. Externe IDs,
+    die nicht in der DB existieren, tauchen im Ergebnis-dict schlicht
+    nicht auf (kein Fehler, kein None-Eintrag) — der Aufrufer entscheidet
+    selbst, was "unbekannt" bedeutet.
+    """
+    if not external_ids:
+        return {}
+
+    # selectinload(JobORM.evaluation) weist SQLAlchemy an, die zugehörigen
+    # EvaluationORMs in EINER separaten IN-Query nachzuladen, statt pro
+    # Job einzeln (was der lazy-Default wäre). "selectin" schlägt "joined"
+    # hier, weil eine 1:1-Relation kein Duplikat-Risiko bei JOIN hätte,
+    # aber selectin auch bei größeren Batches robust bleibt.
+    job_orms = (
+        session.query(JobORM)
+        .options(selectinload(JobORM.evaluation))
+        .filter(JobORM.external_id.in_(external_ids))
+        .all()
+    )
+    return {
+        job_orm.external_id: _orm_to_evaluated_job(job_orm)
+        for job_orm in job_orms
+    }
 
 
 def save_evaluated_job(
@@ -148,10 +186,13 @@ def save_evaluated_job(
 ) -> None:
     """Speichert einen EvaluatedJob idempotent in der DB.
 
-    Idempotenz: falls die external_id schon existiert, wird nichts
-    getan — kein Update, kein Fehler, kein Log. Das ist die richtige
-    Semantik für Dedup-Hits, die versehentlich doch bis in den Storage-
-    Node gelangen (z.B. Race zwischen zwei parallelen Läufen).
+   Idempotenz: falls die external_id schon existiert, wird nichts getan.
+    Deckt zuverlässig wiederholte/doppelte Aufrufe INNERHALB desselben Laufs
+    ab (z.B. falls ein Job versehentlich zweimal in derselben Job-Liste
+    auftaucht). Schützt NICHT vor einer echten Race Condition zwischen zwei
+    parallelen Prozessen -- das übernimmt der unique=True-Constraint auf
+    external_id in JobORM (siehe #10), der bei einem echten Race eine
+    IntegrityError wirft, kein stilles no-op.
 
     Es passiert KEIN commit() hier. Der Node ruft save_evaluated_job()
     für alle Jobs des Laufs auf und committet einmal am Ende —

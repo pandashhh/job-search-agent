@@ -32,8 +32,9 @@ def _make_job(external_id: str) -> Job:
 
 
 def _make_evaluated_job(external_id: str, fit_score: float = 0.8) -> EvaluatedJob:
-    """Wird als Rückgabewert von load_evaluated_job simuliert — repräsentiert
-    einen Job, der schon in der DB liegt und samt Bewertung geladen wird."""
+    """Wird als Rückgabewert von load_evaluated_jobs_batch simuliert —
+    repräsentiert einen Job, der schon in der DB liegt und samt Bewertung
+    geladen wird."""
     return EvaluatedJob(
         job=_make_job(external_id),
         evaluation=JobEvaluation(
@@ -63,6 +64,9 @@ async def test_dedup_node_trennt_bekannte_von_unbekannten() -> None:
     """3 filtered_jobs, davon 1 bekannt:
     - filtered_jobs danach nur noch die 2 unbekannten
     - evaluated_jobs um den bekannten (aus DB rekonstruierten) gewachsen
+
+    load_evaluated_jobs_batch wird EINMAL aufgerufen (Batch-Query,
+    kein N+1) — das prüfen wir mit assert_called_once.
     """
     jobs = [
         _make_job("neu-1"),
@@ -71,11 +75,15 @@ async def test_dedup_node_trennt_bekannte_von_unbekannten() -> None:
     ]
     aus_db = _make_evaluated_job("bekannt-1", fit_score=0.9)
 
+    # Batch-Funktion gibt ein dict external_id -> EvaluatedJob zurück —
+    # nur die tatsächlich in der DB gefundenen IDs sind Keys
+    batch_return = {"bekannt-1": aus_db}
+
     # SessionLocal gemockt: () -> mock_session; close() reicht als No-op
     mock_session = MagicMock()
     with patch("src.agent.graph.SessionLocal", return_value=mock_session), patch(
-        "src.agent.graph.get_known_external_ids", return_value={"bekannt-1"}
-    ), patch("src.agent.graph.load_evaluated_job", return_value=aus_db):
+        "src.agent.graph.load_evaluated_jobs_batch", return_value=batch_return
+    ) as mock_batch:
         result = await dedup_node(_base_state(jobs, evaluated_jobs=[]))
 
     # Nur die unbekannten bleiben zurück, ihre Reihenfolge muss erhalten sein
@@ -84,6 +92,8 @@ async def test_dedup_node_trennt_bekannte_von_unbekannten() -> None:
     assert len(result["evaluated_jobs"]) == 1
     assert result["evaluated_jobs"][0].job.external_id == "bekannt-1"
     assert result["evaluated_jobs"][0].evaluation.fit_score == 0.9
+    # Genau EIN Batch-Aufruf (kein Job-für-Job-Nachladen)
+    mock_batch.assert_called_once()
     # Session muss geschlossen worden sein — sonst leaken Connections
     mock_session.close.assert_called_once()
 
@@ -95,16 +105,17 @@ async def test_dedup_node_keine_bekannten_laesst_alles_unveraendert() -> None:
     jobs = [_make_job("neu-1"), _make_job("neu-2")]
 
     mock_session = MagicMock()
+    # Leeres dict = keine der IDs war in der DB
     with patch("src.agent.graph.SessionLocal", return_value=mock_session), patch(
-        "src.agent.graph.get_known_external_ids", return_value=set()
-    ), patch("src.agent.graph.load_evaluated_job") as mock_load:
+        "src.agent.graph.load_evaluated_jobs_batch", return_value={}
+    ) as mock_batch:
         result = await dedup_node(_base_state(jobs, evaluated_jobs=[]))
 
     assert [j.external_id for j in result["filtered_jobs"]] == ["neu-1", "neu-2"]
     assert result["evaluated_jobs"] == []
-    # load_evaluated_job darf für keinen einzigen Job aufgerufen worden
-    # sein — sonst wäre die "bekannt?"-Prüfung defekt
-    mock_load.assert_not_called()
+    # Auch bei "nichts bekannt": genau EIN Batch-Aufruf — die Kurzschluss-
+    # Optimierung greift nur bei LEEREN filtered_jobs, nicht hier
+    mock_batch.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -115,15 +126,17 @@ async def test_dedup_node_alle_bekannt_leert_filtered_jobs() -> None:
     """
     jobs = [_make_job("bekannt-a"), _make_job("bekannt-b"), _make_job("bekannt-c")]
 
-    # load_evaluated_job liefert für jeden Aufruf den passenden Mock
-    def _load_stub(_session, ext_id):
-        return _make_evaluated_job(ext_id, fit_score=0.5)
+    # Batch-Return enthält alle drei IDs mit passenden EvaluatedJob-Mocks
+    batch_return = {
+        "bekannt-a": _make_evaluated_job("bekannt-a", fit_score=0.5),
+        "bekannt-b": _make_evaluated_job("bekannt-b", fit_score=0.5),
+        "bekannt-c": _make_evaluated_job("bekannt-c", fit_score=0.5),
+    }
 
     mock_session = MagicMock()
     with patch("src.agent.graph.SessionLocal", return_value=mock_session), patch(
-        "src.agent.graph.get_known_external_ids",
-        return_value={"bekannt-a", "bekannt-b", "bekannt-c"},
-    ), patch("src.agent.graph.load_evaluated_job", side_effect=_load_stub):
+        "src.agent.graph.load_evaluated_jobs_batch", return_value=batch_return
+    ):
         result = await dedup_node(_base_state(jobs, evaluated_jobs=[]))
 
     assert result["filtered_jobs"] == []
@@ -141,8 +154,13 @@ async def test_dedup_node_leere_liste_baut_keine_session_auf() -> None:
     Kurzschluss-Optimierung — sonst würden Nulltreffer-Läufe unnötig
     eine DB-Verbindung öffnen.
     """
-    with patch("src.agent.graph.SessionLocal") as mock_session_local:
+    with patch("src.agent.graph.SessionLocal") as mock_session_local, patch(
+        "src.agent.graph.load_evaluated_jobs_batch"
+    ) as mock_batch:
         result = await dedup_node(_base_state([], evaluated_jobs=[]))
 
     assert result == {}
     mock_session_local.assert_not_called()
+    # Bei komplett leerer Eingabe darf auch die Batch-Funktion nicht laufen —
+    # der Kurzschluss soll VOR jedem DB-Kontakt greifen
+    mock_batch.assert_not_called()

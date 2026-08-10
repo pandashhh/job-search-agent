@@ -130,7 +130,16 @@ async def test_evaluate_node_bewertet_alle_gefilterten_jobs() -> None:
 @pytest.mark.asyncio
 async def test_evaluate_node_leere_liste_macht_keinen_api_call() -> None:
     """Ohne gefilterte Jobs darf der Node keinen einzigen API-Call machen —
-    sonst würde ein leerer Suchlauf trotzdem Kosten produzieren."""
+    sonst würde ein leerer Suchlauf trotzdem Kosten produzieren.
+
+    Rückgabe ist ein LEERES Dict, kein {"evaluated_jobs": []}. Grund:
+    LangGraph überschreibt im State exakt die Keys, die im Rückgabe-Dict
+    stehen. dedup_node kann evaluated_jobs bereits mit Dedup-Treffern
+    vorbefüllt haben — würde evaluate_node hier {"evaluated_jobs": []}
+    zurückgeben, würden diese Einträge gelöscht. Ein leeres Dict lässt
+    den State unangetastet und ist deshalb die korrekte "nichts zu tun"-
+    Signalisierung.
+    """
     chat_mock = _build_chat_mock([])  # side_effect leer, würde aber sofort scheitern
 
     with patch("src.agent.graph.ChatAnthropic", chat_mock), patch(
@@ -138,7 +147,8 @@ async def test_evaluate_node_leere_liste_macht_keinen_api_call() -> None:
     ):
         result = await evaluate_node(_base_state([]))
 
-    assert result == {"evaluated_jobs": []}
+    # Leer, damit dedup_node-Einträge im State erhalten bleiben (siehe Docstring)
+    assert result == {}
     # Die Kernaussage: ChatAnthropic wurde NIE instanziiert
     chat_mock.assert_not_called()
 

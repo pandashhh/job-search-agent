@@ -26,7 +26,7 @@ from src.config import settings
 from src.db.embeddings import generate_embedding
 from src.db.repository import (
     get_known_external_ids,
-    load_evaluated_job,
+    load_evaluated_jobs_batch,
     save_evaluated_job,
 )
 from src.db.session import SessionLocal
@@ -123,20 +123,20 @@ def _dedup_split(
 ) -> tuple[list[Job], list[EvaluatedJob]]:
     """Synchroner DB-Teil des dedup_node — via to_thread aufgerufen.
 
-    Gibt zwei Listen zurück:
-    - unbekannte Jobs (bleiben in filtered_jobs für evaluate_node)
-    - bereits bewertete Jobs (werden an evaluated_jobs angehängt)
-    Alles in EINER Batch-Query auf get_known_external_ids, kein N+1.
+    EINE Batch-Query (load_evaluated_jobs_batch) statt vorher zwei
+    Abfrage-Runden (erst IDs holen, dann pro bekanntem Job einzeln
+    laden). Der Aufruf lädt Jobs UND Evaluations gemeinsam über
+    selectinload — kein N+1 mehr.
     """
     externe_ids = [job.external_id for job in filtered_jobs]
-    bekannt = get_known_external_ids(session, externe_ids)
+    bekannt_map = load_evaluated_jobs_batch(session, externe_ids)
 
     unbekannte: list[Job] = []
     aus_db_geladen: list[EvaluatedJob] = []
     for job in filtered_jobs:
-        if job.external_id in bekannt:
-            # Aus der DB reanimieren — spart den Anthropic-Call
-            aus_db_geladen.append(load_evaluated_job(session, job.external_id))
+        if job.external_id in bekannt_map:
+            # Aus der DB reanimierter EvaluatedJob — spart den Anthropic-Call
+            aus_db_geladen.append(bekannt_map[job.external_id])
         else:
             unbekannte.append(job)
     return unbekannte, aus_db_geladen
@@ -303,8 +303,12 @@ async def store_node(state: AgentState) -> dict:
         await asyncio.to_thread(_store_all, session, state["evaluated_jobs"])
         return {}
     except Exception as e:
-        # rollback ebenfalls im Thread — session.rollback ist synchron
-        # und würde sonst gegen den Session-State (PendingRollback) laufen
+        '''
+        rollback ebenfalls im Thread -- session.rollback() ist wie jede andere
+        Session-Operation synchron/blockierend (Netzwerk-Roundtrip zu Postgres),
+        daher aus Konsistenzgründen genauso über to_thread geführt wie
+        _store_all selbst
+        '''
         await asyncio.to_thread(session.rollback)
         return {"errors": state["errors"] + [f"Store-Node: {e}"]}
     finally:

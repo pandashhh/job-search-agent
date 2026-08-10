@@ -17,6 +17,7 @@ from src.db.models import EvaluationORM, JobORM
 from src.db.repository import (
     get_known_external_ids,
     load_evaluated_job,
+    load_evaluated_jobs_batch,
     save_evaluated_job,
 )
 
@@ -150,3 +151,66 @@ def test_load_evaluated_job_rekonstruiert_originaldaten(
     assert geladen.evaluation.fit_score == 0.42
     assert geladen.evaluation.matched_skills == ["Python", "LangGraph"]
     assert geladen.evaluation.missing_skills == ["Airflow"]
+
+
+def test_load_evaluated_jobs_batch_gibt_nur_bekannte_zurueck(
+    db_session: Session,
+) -> None:
+    """Batch-Load: gemischte Liste (bekannt + unbekannt) -> dict nur mit
+    den bekannten; unbekannte IDs erscheinen weder als None-Eintrag noch
+    als Fehler.
+
+    Das ist der Kontrakt, auf den dedup_node baut: "was nicht im dict
+    steht, ist unbekannt und muss durch evaluate_node".
+    """
+    save_evaluated_job(
+        db_session, _make_evaluated_job("repo-batch-a", fit_score=0.4), _DUMMY_EMBEDDING
+    )
+    save_evaluated_job(
+        db_session, _make_evaluated_job("repo-batch-b", fit_score=0.6), _DUMMY_EMBEDDING
+    )
+    db_session.commit()
+    # expire_all(): analog zum load_evaluated_job-Test — sonst käme das
+    # Ergebnis potenziell aus dem Identity-Map und die DB wäre unbefragt
+    db_session.expire_all()
+
+    ergebnis = load_evaluated_jobs_batch(
+        db_session, ["repo-batch-a", "repo-batch-b", "repo-batch-existiert-nicht"]
+    )
+
+    # Nur die zwei bekannten sind im dict — unbekannte tauchen nicht auf
+    assert set(ergebnis.keys()) == {"repo-batch-a", "repo-batch-b"}
+    # Und beide sind vollständig rekonstruiert (Evaluation-Zugriff darf
+    # keinen DetachedInstanceError werfen — selectinload hat sie geladen)
+    assert ergebnis["repo-batch-a"].evaluation.fit_score == 0.4
+    assert ergebnis["repo-batch-b"].evaluation.fit_score == 0.6
+    assert ergebnis["repo-batch-a"].job.title == "Junior AI Engineer"
+
+
+def test_load_evaluated_jobs_batch_leere_liste_gibt_leeres_dict(
+    db_session: Session,
+) -> None:
+    """Frühexit-Pfad: leere Eingabe -> leeres dict, kein DB-Roundtrip.
+
+    Verifiziert über einen Query-Counter, dass tatsächlich keine SQL
+    ausgeführt wurde — sonst wäre die "if not external_ids"-Guard
+    stillschweigend defekt.
+    """
+    from sqlalchemy import event
+
+    ausgefuehrte_queries: list[str] = []
+
+    def _query_listener(conn, cursor, statement, params, context, executemany):
+        ausgefuehrte_queries.append(statement)
+
+    # Auf dem Bind-Engine der Session lauschen — jede SQL landet hier,
+    # bevor sie zur DB rausgeht
+    engine = db_session.get_bind()
+    event.listen(engine, "before_cursor_execute", _query_listener)
+    try:
+        ergebnis = load_evaluated_jobs_batch(db_session, [])
+    finally:
+        event.remove(engine, "before_cursor_execute", _query_listener)
+
+    assert ergebnis == {}
+    assert ausgefuehrte_queries == []
