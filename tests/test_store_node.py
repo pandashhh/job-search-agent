@@ -1,25 +1,40 @@
-"""Unit-Tests für store_node() aus src/agent/graph.py.
+"""Integrationstests für store_node() aus src/agent/graph.py.
 
-monkeypatch lenkt settings.results_dir auf tmp_path um — so schreibt der
-Test nicht in das echte data/results/, und pytest räumt tmp_path danach
-automatisch auf.
+ECHTE Postgres-Verbindung über die db_session-Fixture (aus conftest.py) —
+Persistenz wird gegen die echte DB verifiziert, nicht gegen einen
+gemockten ORM-State.
+
+generate_embedding IST gemockt, damit die Tests nicht auf das ML-Modell
+warten müssen (~130 MB Download beim ersten Aufruf). Der reale
+Embedding-Pfad ist über tests/manual/pgvector_similarity_check.py
+abgedeckt.
+
+SessionLocal wird auf das Test-Engine umgelenkt (monkeypatch), sonst
+würde store_node eine zweite Session gegen dieselbe DB öffnen und die
+db_session-Fixture-Cleanups würden sich in die Quere kommen.
 """
 
-import json
-from pathlib import Path
+from unittest.mock import patch
 
 import pytest
+from sqlalchemy import Engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from src.agent.graph import store_node
 from src.agent.models import EvaluatedJob, Job, JobEvaluation
+from src.db.models import EvaluationORM, JobORM
+from src.db.repository import save_evaluated_job
+
+# Fester Dummy-Vektor für das gemockte Embedding. Länge 384 -> passt zur
+# Vector(384)-Spalte, Werte inhaltlich egal (Ähnlichkeitssuche wird hier
+# nicht getestet, nur der Persistenz-Pfad).
+_MOCK_EMBEDDING = [0.1] * 384
 
 
-def _make_evaluated_job(external_id: str, fit_score: float) -> EvaluatedJob:
-    """Fabrik für EvaluatedJob mit sinnvollen Defaults.
-
-    Nur external_id und fit_score sind pro Test relevant — der Rest
-    sind Dummy-Werte, damit Pydantic beim Instanziieren durchgeht.
-    """
+def _make_evaluated_job(
+    external_id: str, *, fit_score: float = 0.8
+) -> EvaluatedJob:
+    """Fabrik mit sinnvollen Defaults — nur external_id + fit_score variabel."""
     return EvaluatedJob(
         job=Job(
             external_id=external_id,
@@ -41,7 +56,7 @@ def _make_evaluated_job(external_id: str, fit_score: float) -> EvaluatedJob:
 
 
 def _base_state(evaluated_jobs: list[EvaluatedJob]) -> dict:
-    """AgentState-kompatibler Dict mit den Pflichtfeldern."""
+    """Vollständiges AgentState-Dict für Node-Aufrufe."""
     return {
         "search_term": "AI Engineer",
         "location": "Hamburg",
@@ -53,63 +68,125 @@ def _base_state(evaluated_jobs: list[EvaluatedJob]) -> dict:
     }
 
 
-@pytest.mark.asyncio
-async def test_store_node_schreibt_evaluated_jobs_als_json(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """2 EvaluatedJobs rein -> genau eine JSON-Datei mit beiden Jobs raus.
+@pytest.fixture
+def store_session_factory(db_engine: Engine, monkeypatch: pytest.MonkeyPatch):
+    """Lenkt src.agent.graph.SessionLocal auf das Test-Engine um.
 
-    Prüft die Serialisierung end-to-end: JSON parsen, verschachtelte
-    Felder (job.external_id, evaluation.fit_score) auf Richtigkeit
-    kontrollieren.
+    Ohne diesen Patch würde store_node den Modul-Level SessionLocal aus
+    src.db.session nutzen — der zeigt zwar auf dieselbe DB, aber jede
+    Node-Session wäre unabhängig von db_session (der Fixture-Session).
+    Die Fixture-Cleanups (DELETE nach jedem Test) räumen zwar trotzdem
+    auf, aber wir wollen im Test bewusst dieselbe Engine (also denselben
+    Connection Pool) verwenden, um Isolationsfehler auszuschließen.
     """
-    # settings.results_dir auf tmp_path umlenken — greift, weil store_node
-    # zur Laufzeit auf settings.results_dir zugreift, nicht auf einen
-    # kopierten Wert
-    monkeypatch.setattr("src.agent.graph.settings.results_dir", str(tmp_path))
-
-    jobs = [
-        _make_evaluated_job("job-1", 0.9),
-        _make_evaluated_job("job-2", 0.6),
-    ]
-    result = await store_node(_base_state(jobs))
-
-    # Store hat keinen State-Return-Wert — bei Erfolg leeres Dict
-    assert result == {}
-
-    # Es darf genau eine Datei entstanden sein
-    dateien = list(tmp_path.glob("*.json"))
-    assert len(dateien) == 1
-
-    # Dateiname folgt dem Format YYYYMMDD_HHMMSS.json (8 Ziffern + _ + 6 Ziffern)
-    assert dateien[0].name[:8].isdigit()
-    assert dateien[0].name[8] == "_"
-    assert dateien[0].name[9:15].isdigit()
-
-    # Inhalt: die 2 Jobs mit richtigen IDs und Scores
-    daten = json.loads(dateien[0].read_text(encoding="utf-8"))
-    assert len(daten) == 2
-    assert daten[0]["job"]["external_id"] == "job-1"
-    assert daten[0]["evaluation"]["fit_score"] == 0.9
-    assert daten[1]["job"]["external_id"] == "job-2"
-    assert daten[1]["evaluation"]["fit_score"] == 0.6
+    TestSessionLocal = sessionmaker(bind=db_engine)
+    monkeypatch.setattr("src.agent.graph.SessionLocal", TestSessionLocal)
 
 
 @pytest.mark.asyncio
-async def test_store_node_schreibt_datei_auch_bei_leerer_liste(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_store_node_persistiert_zwei_neue_jobs(
+    db_session: Session,
+    store_session_factory: None,
 ) -> None:
-    """Nulltreffer-Läufe sollen genauso nachvollziehbar sein wie
-    erfolgreiche — bewusst KEIN Skip bei leerer Liste."""
-    monkeypatch.setattr("src.agent.graph.settings.results_dir", str(tmp_path))
+    """2 neue EvaluatedJobs -> je 2 Zeilen in jobs und evaluations,
+    embedding-Spalte befüllt (nicht None)."""
+    jobs = [
+        _make_evaluated_job("store-neu-1", fit_score=0.9),
+        _make_evaluated_job("store-neu-2", fit_score=0.6),
+    ]
 
-    result = await store_node(_base_state([]))
+    with patch(
+        "src.agent.graph.generate_embedding", return_value=_MOCK_EMBEDDING
+    ) as mock_emb:
+        result = await store_node(_base_state(jobs))
 
     assert result == {}
-    dateien = list(tmp_path.glob("*.json"))
-    assert len(dateien) == 1
-    # Inhalt ist ein leeres JSON-Array — das ist der Marker "Lauf lief,
-    # aber es gab nichts zu speichern"
-    assert json.loads(dateien[0].read_text(encoding="utf-8")) == []
+
+    # embedding wurde für BEIDE Jobs berechnet (beide waren neu)
+    assert mock_emb.call_count == 2
+
+    # jobs-Tabelle: beide angelegt
+    gespeicherte = (
+        db_session.query(JobORM)
+        .filter(JobORM.external_id.in_(["store-neu-1", "store-neu-2"]))
+        .order_by(JobORM.external_id)
+        .all()
+    )
+    assert len(gespeicherte) == 2
+    assert [j.external_id for j in gespeicherte] == ["store-neu-1", "store-neu-2"]
+    # embedding-Spalte darf nicht None sein und muss zur Vector(384) passen
+    for job_orm in gespeicherte:
+        assert job_orm.embedding is not None
+        assert len(job_orm.embedding) == 384
+
+    # evaluations-Tabelle: 2 Zeilen mit den richtigen Scores
+    scores = {
+        eval_orm.job_id: eval_orm.fit_score
+        for eval_orm in db_session.query(EvaluationORM).all()
+    }
+    assert scores[gespeicherte[0].id] == 0.9
+    assert scores[gespeicherte[1].id] == 0.6
+
+
+@pytest.mark.asyncio
+async def test_store_node_ueberspringt_bereits_bekannten_job(
+    db_session: Session,
+    store_session_factory: None,
+) -> None:
+    """1 Job schon in DB, 1 neu -> nur für den neuen Job wird ein Embedding
+    berechnet, kein unique-Constraint-Fehler durch den bekannten."""
+    # Vorbedingung: einer der beiden Jobs liegt schon in der DB
+    schon_da = _make_evaluated_job("store-schon-da", fit_score=0.7)
+    save_evaluated_job(db_session, schon_da, _MOCK_EMBEDDING)
+    db_session.commit()
+
+    # Beide gehen jetzt durch store_node — der eine schon bekannt, der andere neu
+    jobs = [
+        _make_evaluated_job("store-schon-da", fit_score=0.99),  # anderer Score, um zu prüfen dass NICHT geupdated wird
+        _make_evaluated_job("store-neu", fit_score=0.5),
+    ]
+
+    with patch(
+        "src.agent.graph.generate_embedding", return_value=_MOCK_EMBEDDING
+    ) as mock_emb:
+        result = await store_node(_base_state(jobs))
+
+    # Kein Fehler zurückgegeben (kein unique-Constraint-Crash trotz Duplikat)
+    assert result == {}
+
+    # Embedding NUR für den neuen Job berechnet — Dedup-Ersparnis
+    assert mock_emb.call_count == 1
+
+    # Beide external_ids sind in der DB, aber jeweils nur einmal
+    assert (
+        db_session.query(JobORM)
+        .filter_by(external_id="store-schon-da")
+        .count()
+        == 1
+    )
+    assert (
+        db_session.query(JobORM).filter_by(external_id="store-neu").count() == 1
+    )
+
+    # Der bereits bekannte Job hat noch seinen Original-Score (nicht 0.99)
+    orm_schon_da = (
+        db_session.query(JobORM).filter_by(external_id="store-schon-da").one()
+    )
+    assert orm_schon_da.evaluation.fit_score == 0.7
+
+
+@pytest.mark.asyncio
+async def test_store_node_leere_liste_macht_nichts(
+    db_session: Session,
+    store_session_factory: None,
+) -> None:
+    """Ohne evaluated_jobs: keine DB-Aktion, kein Fehler, kein Embedding."""
+    with patch(
+        "src.agent.graph.generate_embedding", return_value=_MOCK_EMBEDDING
+    ) as mock_emb:
+        result = await store_node(_base_state([]))
+
+    assert result == {}
+    # Weder Embedding-Berechnung noch DB-Zeilen entstanden
+    mock_emb.assert_not_called()
+    assert db_session.query(JobORM).count() == 0

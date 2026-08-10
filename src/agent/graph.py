@@ -1,24 +1,35 @@
 """LangGraph-Graph-Definition für den Job-Search-Agenten.
 
-Topologie: START → search → filter → evaluate → store → END
+Topologie: START → search → filter → dedup → evaluate → store → END
 Strikt linear, keine Conditional Edges — leere Ergebnisse laufen als
 leere Listen durch die restlichen Nodes (jeder Node behandelt sie als No-op).
+
+dedup wurde vor evaluate eingefügt (Issue #12), damit bereits bekannte
+Jobs nicht erneut per LLM bewertet werden — spart Anthropic-Kosten und
+Latenz. Bekannte Jobs werden aus der DB rekonstruiert und direkt in
+evaluated_jobs übernommen; nur wirklich neue Jobs erreichen evaluate.
 """
 
-import json
-from datetime import datetime
-from pathlib import Path
+import asyncio
 
 from langchain_anthropic import ChatAnthropic
 from langgraph.constants import END, START
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from sqlalchemy.orm import Session
 
 from src.agent.evaluation import build_system_prompt, load_profile
 from src.agent.filters import filter_job, load_filter_rules
 from src.agent.models import EvaluatedJob, Job, JobEvaluation, RejectedJob
 from src.agent.state import AgentState
 from src.config import settings
+from src.db.embeddings import generate_embedding
+from src.db.repository import (
+    get_known_external_ids,
+    load_evaluated_job,
+    save_evaluated_job,
+)
+from src.db.session import SessionLocal
 from src.mcp_client.jobspy_client import search_jobs_via_mcp
 
 
@@ -107,6 +118,64 @@ async def filter_node(state: AgentState) -> dict:
     return {"filtered_jobs": filtered_jobs, "rejected_jobs": rejected_jobs}
 
 
+def _dedup_split(
+    session: Session, filtered_jobs: list[Job]
+) -> tuple[list[Job], list[EvaluatedJob]]:
+    """Synchroner DB-Teil des dedup_node — via to_thread aufgerufen.
+
+    Gibt zwei Listen zurück:
+    - unbekannte Jobs (bleiben in filtered_jobs für evaluate_node)
+    - bereits bewertete Jobs (werden an evaluated_jobs angehängt)
+    Alles in EINER Batch-Query auf get_known_external_ids, kein N+1.
+    """
+    externe_ids = [job.external_id for job in filtered_jobs]
+    bekannt = get_known_external_ids(session, externe_ids)
+
+    unbekannte: list[Job] = []
+    aus_db_geladen: list[EvaluatedJob] = []
+    for job in filtered_jobs:
+        if job.external_id in bekannt:
+            # Aus der DB reanimieren — spart den Anthropic-Call
+            aus_db_geladen.append(load_evaluated_job(session, job.external_id))
+        else:
+            unbekannte.append(job)
+    return unbekannte, aus_db_geladen
+
+
+async def dedup_node(state: AgentState) -> dict:
+    """Trennt bekannte von unbekannten Jobs — spart LLM-Bewertungskosten.
+
+    Ablauf:
+    1. Bei leerem filtered_jobs sofort raus, keine DB-Verbindung nötig
+    2. Session öffnen, blockierenden DB-Teil in einem Worker-Thread
+       ausführen (SQLAlchemy-Session ist synchron; ohne to_thread würde
+       der ganze Event-Loop während der DB-Query blockieren — bei
+       parallelen Runs merkbar; siehe Review zu Issue #11)
+    3. Bekannte Jobs aus der DB als EvaluatedJob rekonstruieren und
+       an state["evaluated_jobs"] anhängen
+    4. Nur unbekannte bleiben in filtered_jobs -> evaluate_node arbeitet
+       ausschließlich auf neuen Jobs
+    """
+    if not state["filtered_jobs"]:
+        # Nichts zu tun — kein Session-Aufbau, kein State-Update
+        return {}
+
+    session = SessionLocal()
+    try:
+        unbekannte, aus_db = await asyncio.to_thread(
+            _dedup_split, session, state["filtered_jobs"]
+        )
+    finally:
+        session.close()
+
+    return {
+        "filtered_jobs": unbekannte,
+        # Anhängen, nicht überschreiben — evaluate_node hängt seine
+        # neuen Bewertungen ebenfalls an (siehe Kommentar dort)
+        "evaluated_jobs": state["evaluated_jobs"] + aus_db,
+    }
+
+
 async def evaluate_node(state: AgentState) -> dict:
     """Bewertet jeden gefilterten Job via Claude Haiku (Structured Output).
 
@@ -119,10 +188,16 @@ async def evaluate_node(state: AgentState) -> dict:
        Parallelisierung im ersten Wurf; asyncio.gather+Semaphore kommt später)
     5. Pro Job: bei API-Fehler den Job überspringen, Fehler in errors
        sammeln, restliche Jobs trotzdem bewerten (kein Alles-oder-Nichts)
+
+    WICHTIG (ab #12): Rückgabe hängt an state["evaluated_jobs"] AN,
+    überschreibt nicht. Grund: dedup_node befüllt evaluated_jobs bereits
+    mit rekonstruierten bekannten Jobs — würden wir überschreiben, gingen
+    diese Einträge verloren.
     """
-    # Kurzschluss: keine Eingabe -> keine Ausgabe, kein API-Call
+    # Kurzschluss: keine neuen Jobs -> keine neuen Bewertungen, State
+    # bleibt wie er ist (dedup_node kann evaluated_jobs gefüllt haben)
     if not state["filtered_jobs"]:
-        return {"evaluated_jobs": []}
+        return {}
 
     profile = load_profile()
     system_prompt = build_system_prompt(profile)
@@ -132,7 +207,7 @@ async def evaluate_node(state: AgentState) -> dict:
     chat = ChatAnthropic(model=settings.evaluation_model,anthropic_api_key=settings.anthropic_api_key,)
     chain = chat.with_structured_output(JobEvaluation)
 
-    evaluated_jobs: list[EvaluatedJob] = []
+    neue_bewertungen: list[EvaluatedJob] = []
     new_errors: list[str] = []
 
     for job in state["filtered_jobs"]:
@@ -160,7 +235,7 @@ async def evaluate_node(state: AgentState) -> dict:
                     ("human", user_message),
                 ]
             )
-            evaluated_jobs.append(EvaluatedJob(job=job, evaluation=evaluation))
+            neue_bewertungen.append(EvaluatedJob(job=job, evaluation=evaluation))
         except Exception as e:
             # Einen kaputten Bewertungs-Call überspringen, nicht den
             # ganzen Node stoppen — die anderen Jobs sollen trotzdem
@@ -169,61 +244,79 @@ async def evaluate_node(state: AgentState) -> dict:
                 f"Evaluate-Node: Job '{job.external_id}' übersprungen: {e}"
             )
 
-    result: dict = {"evaluated_jobs": evaluated_jobs}
+    # Anhängen an das, was dedup_node bereits reingelegt hat
+    result: dict = {"evaluated_jobs": state["evaluated_jobs"] + neue_bewertungen}
     if new_errors:
         result["errors"] = state["errors"] + new_errors
     return result
 
 
-async def store_node(state: AgentState) -> dict:
-    """Schreibt evaluated_jobs als JSON nach {results_dir}/{timestamp}.json.
+def _store_all(session: Session, evaluated_jobs: list[EvaluatedJob]) -> None:
+    """Synchroner Persistenz-Teil des store_node — via to_thread aufgerufen.
 
-    Ablauf:
-    1. Zielverzeichnis anlegen (idempotent via mkdir exist_ok=True)
-    2. Timestamp im Format YYYYMMDD_HHMMSS als Dateiname — sortierbar,
-       lexikografische Sortierung = chronologische Sortierung
-    3. Jedes EvaluatedJob über model_dump() (Pydantic v2) in ein dict
-       konvertieren, dann als JSON schreiben (indent=2 lesbar,
-       ensure_ascii=False für Umlaute)
-    4. Auch bei leerer evaluated_jobs-Liste eine Datei schreiben (mit
-       []) — macht Nulltreffer-Läufe genauso nachvollziehbar wie
-       erfolgreiche Läufe
-    5. Bei Schreibfehler (Berechtigung, Disk voll): Fehler in errors
-       statt Crash — gleiche Philosophie wie Search- und Evaluate-Node
+    Ein einziger commit() am Ende: Alles-oder-Nichts pro Lauf. Fällt
+    ein Insert oder ein Embedding-Call in der Mitte um, rollt der Node-
+    Code (oben) per Exception-Handler zurück.
 
-    Rückgabe: {} bei Erfolg (Storage ist reiner Seiteneffekt, kein
-    State-Feld wird verändert), {"errors": [...]} bei Fehler.
+    Embedding-Berechnung nur für tatsächlich neue Jobs — Dedup-Hits sind
+    schon in der DB und haben ein Embedding, für sie ~130 MB Modell-CPU
+    zu verbrennen wäre Verschwendung (Punkt aus Review #11, jetzt gelöst).
     """
+    externe_ids = [ej.job.external_id for ej in evaluated_jobs]
+    bekannt = get_known_external_ids(session, externe_ids)
+
+    for evaluated_job in evaluated_jobs:
+        if evaluated_job.job.external_id in bekannt:
+            # save_evaluated_job() wäre schon idempotent, aber wir wollen
+            # das teure generate_embedding() explizit überspringen
+            continue
+        # Kombiniert Job-Titel + Beschreibung — der Titel trägt viel
+        # semantisches Gewicht und würde in einer reinen Description-
+        # Embedding untergehen
+        embedding_text = f"{evaluated_job.job.title}\n{evaluated_job.job.description}"
+        embedding = generate_embedding(embedding_text)
+        save_evaluated_job(session, evaluated_job, embedding)
+
+    session.commit()
+
+
+async def store_node(state: AgentState) -> dict:
+    """Persistiert evaluated_jobs in Postgres (jobs + evaluations).
+
+    Ersetzt die JSON-Datei-Persistenz aus M2 (settings.results_dir bleibt
+    aus Rückwärts-Freundlichkeit ungenutzt in der Config stehen). Ablauf:
+    1. Bei leerer Liste: kein Session-Aufbau, kein Fehler, {} zurück
+    2. Session öffnen, in einem Worker-Thread:
+       a. bekannte external_ids per Batch-Query holen
+       b. für jeden neuen Job Embedding berechnen (blockierender ML-Call
+          — deshalb im Thread, um den Event-Loop frei zu halten)
+       c. via save_evaluated_job() speichern (idempotent)
+       d. EIN gemeinsamer commit am Ende
+    3. Bei Exception: rollback, Fehler in errors, kein Crash — gleiche
+       Philosophie wie Search- und Evaluate-Node
+    """
+    if not state["evaluated_jobs"]:
+        return {}
+
+    session = SessionLocal()
     try:
-        # settings.results_dir ist ein String, Path wandelt in Path-Objekt.
-        # parents=True legt auch fehlende Zwischenverzeichnisse an,
-        # exist_ok=True verhindert FileExistsError bei existierendem Ordner
-        results_dir = Path(settings.results_dir)
-        results_dir.mkdir(parents=True, exist_ok=True)
-
-        # strftime-Format: 20260728_143502 -> lexikografisch = chronologisch
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = results_dir / f"{timestamp}.json"
-
-        # model_dump() ist Pydantic-v2-Standard für dict-Konvertierung
-        # (ersetzt das alte .dict()). Verschachtelte Modelle werden
-        # rekursiv serialisiert.
-        data = [ej.model_dump() for ej in state["evaluated_jobs"]]
-
-        # Explizites open() mit encoding="utf-8" — Default hängt vom OS ab
-        # und würde auf Windows Umlaute kaputt schreiben
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-
+        await asyncio.to_thread(_store_all, session, state["evaluated_jobs"])
         return {}
     except Exception as e:
-        # Fehler sammeln statt zu crashen, damit der Graph als Ganzes
-        # nicht wegen eines Storage-Problems fehlschlägt
+        # rollback ebenfalls im Thread — session.rollback ist synchron
+        # und würde sonst gegen den Session-State (PendingRollback) laufen
+        await asyncio.to_thread(session.rollback)
         return {"errors": state["errors"] + [f"Store-Node: {e}"]}
+    finally:
+        session.close()
 
 
 def build_graph() -> CompiledStateGraph:
     """Baut den kompilierten LangGraph-Graphen und gibt ihn zurück.
+
+    Topologie: START → search → filter → dedup → evaluate → store → END
+    dedup sitzt bewusst vor evaluate, damit bekannte Jobs nicht durch den
+    (kostenpflichtigen) LLM-Call laufen.
 
     Aufruf:
         graph = build_graph()
@@ -234,13 +327,15 @@ def build_graph() -> CompiledStateGraph:
     # Nodes registrieren
     builder.add_node("search_node", search_node)
     builder.add_node("filter_node", filter_node)
+    builder.add_node("dedup_node", dedup_node)
     builder.add_node("evaluate_node", evaluate_node)
     builder.add_node("store_node", store_node)
 
-    # Lineare Kanten: START → search → filter → evaluate → store → END
+    # Lineare Kanten: START → search → filter → dedup → evaluate → store → END
     builder.add_edge(START, "search_node")
     builder.add_edge("search_node", "filter_node")
-    builder.add_edge("filter_node", "evaluate_node")
+    builder.add_edge("filter_node", "dedup_node")
+    builder.add_edge("dedup_node", "evaluate_node")
     builder.add_edge("evaluate_node", "store_node")
     builder.add_edge("store_node", END)
 
