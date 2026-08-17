@@ -61,6 +61,17 @@ python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 pip install -r requirements-dev.txt  # nur für Entwicklung/Tests
+alembic upgrade head  # wendet alle Migrationen an und bringt die DB auf den aktuellen Schema-Stand
+```
+
+Die Initial-Migration versucht `CREATE EXTENSION IF NOT EXISTS vector`
+für pgvector. In lokalen und den meisten Managed-Postgres-Setups (Cloud
+SQL, Supabase) hat der DB-User dieses Recht bereits. In strikt getrennten
+Setups (App-User ohne Superuser-Rolle) muss die Extension einmalig als
+Superuser angelegt werden, bevor `alembic upgrade head` läuft:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
 ### jobspy MCP-Server (Datenquelle)
