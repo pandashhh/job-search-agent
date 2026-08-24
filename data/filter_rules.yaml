@@ -1,6 +1,12 @@
-# Regelwerk für den Filter-Node — wird über load_filter_rules() geladen und
-# gegen das Pydantic-Modell FilterRules validiert. Später (M3) kommen diese
-# Regeln aus der DB-Tabelle filter_rules; das Format bleibt gleich.
+# HISTORISCH: Regelwerk für den Filter-Node.
+#
+# Diese Datei wird zur LAUFZEIT NICHT MEHR gelesen — mit der
+# Alembic-Seed-Migration ac7556d5370e sind diese Werte in die
+# filter_rules-Tabelle gewandert. load_filter_rules() liest jetzt
+# aus der DB, editiert wird über die PUT /filter-rules-API.
+#
+# Die Datei bleibt als historische Quelle für die Seed-Migration
+# im Repo (die Migration hardcodiert diese Werte als Anfangszustand).
 
 # Titel, die zu einer Ablehnung führen (case-insensitive Substring-Match)
 title_blacklist:

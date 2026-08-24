@@ -29,8 +29,27 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from src.agent.graph import build_graph
 from src.agent.models import JobEvaluation, Profile
-from src.db.models import EvaluationORM, JobORM
+from src.db.models import EvaluationORM, FilterRulesORM, JobORM
 from src.db.repository import save_evaluated_job
+
+
+def _seed_filter_rules(session: Session) -> None:
+    """Legt die filter_rules-Singleton-Zeile für den Test-Lauf an.
+
+    Vor Issue #14 lasen die Tests die Regeln aus data/filter_rules.yaml.
+    Seit der Seed-Migration ac7556d5370e sitzen sie in der DB — die
+    db_session-Fixture legt die Tabellen frisch an (kein Seed), also
+    muss jeder Test, der den echten filter_node-Pfad läuft, die Zeile
+    selbst schreiben.
+    """
+    session.add(
+        FilterRulesORM(
+            title_blacklist=["Senior", "Lead"],
+            max_experience_years=3,
+            description_blacklist=["Beratungsprojekte"],
+        )
+    )
+    session.commit()
 
 
 # --- Fixtures / Helpers ---------------------------------------------------
@@ -113,14 +132,17 @@ async def test_e2e_pipeline_search_filter_dedup_evaluate_store(
 
     Beweist im Zusammenspiel:
     - Search-Node mappt rohe JobSpy-Dicts korrekt auf Job-Objekte
-    - Filter-Node liest die echte data/filter_rules.yaml und wendet
-      title_blacklist an (Senior fliegt raus)
+    - Filter-Node liest die Regeln aus der DB (Seed-Zeile hier gelegt)
+      und wendet title_blacklist an (Senior fliegt raus)
     - Dedup-Node erkennt keinen bekannten Job (leere DB) -> alles geht
       weiter an Evaluate
     - Evaluate-Node ruft die gemockte Chain für jeden gefilterten Job auf
     - Store-Node persistiert die evaluated_jobs in jobs+evaluations,
       Embedding-Spalte ist befüllt
     """
+    # filter_rules-Zeile für filter_node bereitstellen
+    _seed_filter_rules(db_session)
+
     # Rohdaten des MCP-Servers simulieren — einer davon wird vom Filter
     # aussortiert (title_blacklist enthält "Senior")
     rohe_jobs = [
@@ -253,6 +275,9 @@ async def test_e2e_dedup_holt_bekannten_job_aus_db_und_ueberspringt_llm(
     )
     save_evaluated_job(db_session, bekannt, [0.0] * 384)
     db_session.commit()
+
+    # filter_rules-Zeile für filter_node bereitstellen
+    _seed_filter_rules(db_session)
 
     rohe_jobs = [
         _rohes_job_dict("e2e-known", "Junior AI Engineer"),

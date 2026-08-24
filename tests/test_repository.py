@@ -180,8 +180,13 @@ def test_load_evaluated_jobs_batch_gibt_nur_bekannte_zurueck(
 
     # Nur die zwei bekannten sind im dict — unbekannte tauchen nicht auf
     assert set(ergebnis.keys()) == {"repo-batch-a", "repo-batch-b"}
-    # Und beide sind vollständig rekonstruiert (Evaluation-Zugriff darf
-    # keinen DetachedInstanceError werfen — selectinload hat sie geladen)
+    '''
+    Und beide sind vollständig rekonstruiert (selectinload beweist sich hier durch Performance, nicht durch
+    Absturzvermeidung -- die Session ist zum Zugriffszeitpunkt noch offen,
+    ein DetachedInstanceError wäre auch ohne selectinload nicht aufgetreten.
+    Der eigentliche Beweis für den Effekt von selectinload liegt im
+c   all_count-Test in test_dedup_node.py (assert_called_once).)
+    '''
     assert ergebnis["repo-batch-a"].evaluation.fit_score == 0.4
     assert ergebnis["repo-batch-b"].evaluation.fit_score == 0.6
     assert ergebnis["repo-batch-a"].job.title == "Junior AI Engineer"

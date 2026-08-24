@@ -34,3 +34,9 @@ alembic>=1.13.0
 # (~130 MB) und danach lokal gecacht — keine API-Kosten, kein Netzwerk
 # im Betrieb.
 sentence-transformers>=3.0.0
+
+# HTTP-API: FastAPI + uvicorn als ASGI-Server für Dashboard-Backend
+# und Suchlauf-Trigger. uvicorn[standard] zieht uvloop und httptools
+# für spürbar bessere Performance mit rein.
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
