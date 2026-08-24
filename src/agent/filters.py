@@ -11,12 +11,11 @@ Damit lässt sich filter_job() als simple Kette formulieren.
 """
 
 import re
-from pathlib import Path
 
-import yaml
+from sqlalchemy.orm import Session
 
 from src.agent.models import FilterRules, Job
-from src.config import settings
+from src.db.repository import get_filter_rules
 
 # Vorab kompilierte Regex — spart pro-Job-Kompilierung im Hot Path.
 # Match-Beispiele: "5 Jahre", "3+ years", "10 Jahre".
@@ -26,21 +25,24 @@ from src.config import settings
 _EXPERIENCE_PATTERN = re.compile(r"(\d+)\+?\s*(Jahre|years)", re.IGNORECASE)
 
 
-def load_filter_rules(path: str = settings.filter_rules_path) -> FilterRules:
-    """Lädt und validiert die Filterregeln aus einer YAML-Datei.
+def load_filter_rules(session: Session) -> FilterRules:
+    """Lädt und validiert die Filterregeln aus der Datenbank.
+
+    Bis M2 wurden die Regeln aus data/filter_rules.yaml gelesen. Seit
+    der Seed-Migration ac7556d5370e liegen sie in der filter_rules-
+    Tabelle und sind über die API editierbar. Der YAML-Pfad in
+    settings.filter_rules_path bleibt in der Config bestehen, wird
+    aber nicht mehr gelesen.
 
     Parameter:
-        path: Pfad zur YAML-Datei, relativ zum Working-Directory oder absolut.
+        session: aktive SQLAlchemy-Session (der Aufrufer verwaltet
+                 Öffnen und Schließen — analog zu save_evaluated_job).
 
     Rückgabe:
-        FilterRules-Instanz. Pydantic wirft ValidationError, wenn Felder
-        fehlen oder falsche Typen haben — bewusst laut statt still zu
-        akzeptieren, damit YAML-Tippfehler früh auffallen.
+        FilterRules-Instanz. get_filter_rules() wirft RuntimeError,
+        wenn die Seed-Zeile fehlt (Migration nicht angewendet).
     """
-    # Path statt raw open(): funktioniert auf Windows/Mac/Linux gleich
-    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    # ** entpackt das dict — Pydantic validiert Feldnamen + Typen
-    return FilterRules(**raw)
+    return get_filter_rules(session)
 
 
 def check_title_blacklist(job: Job, rules: FilterRules) -> str | None:

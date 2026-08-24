@@ -2,11 +2,10 @@
 
 Jede Check-Funktion wird isoliert getestet (Treffer + Kein-Treffer),
 plus zwei Sonderfälle: der bewusst simple Range-Match ("3-5 Jahre" -> 5)
-und das Laden einer YAML-Datei über tmp_path.
+und das Laden der Regeln aus der DB (ersetzt den früheren YAML-Load-Test).
 """
 
-import textwrap
-from pathlib import Path
+from sqlalchemy.orm import Session
 
 from src.agent.filters import (
     check_description_blacklist,
@@ -15,6 +14,7 @@ from src.agent.filters import (
     load_filter_rules,
 )
 from src.agent.models import FilterRules, Job
+from src.db.models import FilterRulesORM
 
 
 def _make_job(
@@ -129,28 +129,24 @@ def test_check_description_blacklist_ohne_treffer_gibt_none() -> None:
 # --- load_filter_rules ----------------------------------------------------
 
 
-def test_load_filter_rules_liest_yaml_und_validiert(tmp_path: Path) -> None:
-    """Schreibt eine temporäre YAML, lädt sie, prüft Werte + Typ.
+def test_load_filter_rules_liest_singleton_aus_db(db_session: Session) -> None:
+    """Legt eine filter_rules-Zeile an, prüft dass load_filter_rules()
+    sie als validiertes FilterRules-Pydantic-Objekt zurückgibt.
 
-    tmp_path ist eine pytest-Standard-Fixture, die pro Test ein
-    frisches Temp-Verzeichnis liefert und danach aufräumt — kein Reste-
-    Risiko im echten data/-Ordner.
+    Ersetzt den früheren YAML-Load-Test — die Regeln wandern mit der
+    Seed-Migration ac7556d5370e in die DB, ab dann liest der Filter-
+    Node aus der Tabelle statt aus data/filter_rules.yaml.
     """
-    # textwrap.dedent entfernt die Einrückung, YAML wäre sonst kaputt
-    yaml_content = textwrap.dedent(
-        """
-        title_blacklist:
-          - Senior
-          - Principal
-        max_experience_years: 4
-        description_blacklist:
-          - Reisebereitschaft
-        """
+    db_session.add(
+        FilterRulesORM(
+            title_blacklist=["Senior", "Principal"],
+            max_experience_years=4,
+            description_blacklist=["Reisebereitschaft"],
+        )
     )
-    yaml_file = tmp_path / "filter_rules.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    db_session.commit()
 
-    rules = load_filter_rules(str(yaml_file))
+    rules = load_filter_rules(db_session)
 
     assert isinstance(rules, FilterRules)
     assert rules.title_blacklist == ["Senior", "Principal"]

@@ -74,6 +74,28 @@ Superuser angelegt werden, bevor `alembic upgrade head` läuft:
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
+### HTTP-API starten
+
+Nach dem Setup läuft die FastAPI-App lokal mit uvicorn (Hot-Reload für
+Entwicklung, sonst ohne `--reload`):
+
+```bash
+uvicorn src.api.main:app --reload
+```
+
+Endpoints:
+- `GET  /jobs?min_score=0.5&status_filter=neu&limit=50&offset=0` — bewertete
+  Jobs mit Filter und Pagination
+- `PATCH /jobs/{job_id}/status` — Bewerbungs-Status setzen (Body:
+  `{"status": "beworben"}`)
+- `GET  /filter-rules` und `PUT /filter-rules` — Regelwerk lesen/pflegen
+- `POST /search-runs` — kompletten Suchlauf anstoßen (Body:
+  `{"search_term": "...", "location": "..."}`) — blockiert bis der
+  LangGraph-Lauf fertig ist
+- `GET  /` — Health-Check
+
+OpenAPI-Doku unter `http://localhost:8000/docs` sobald der Server läuft.
+
 ### jobspy MCP-Server (Datenquelle)
 
 Eigener FastMCP-Server um die python-jobspy-Bibliothek (läuft als

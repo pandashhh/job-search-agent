@@ -20,8 +20,13 @@ Jobs eines Laufs zusammen, nicht Job für Job).
 
 from sqlalchemy.orm import Session, selectinload
 
-from src.agent.models import EvaluatedJob, Job, JobEvaluation
-from src.db.models import EvaluationORM, JobORM
+from src.agent.models import EvaluatedJob, FilterRules, Job, JobEvaluation
+from src.db.models import (
+    ApplicationStatusORM,
+    EvaluationORM,
+    FilterRulesORM,
+    JobORM,
+)
 
 
 def _job_to_orm(job: Job, embedding: list[float] | None) -> JobORM:
@@ -216,3 +221,126 @@ def save_evaluated_job(
 
     evaluation_orm = _evaluation_to_orm(evaluated_job.evaluation, job_orm.id)
     session.add(evaluation_orm)
+
+
+# --- filter_rules ---------------------------------------------------------
+
+
+def get_filter_rules(session: Session) -> FilterRules:
+    """Lädt die Singleton-Zeile aus filter_rules als Pydantic-Objekt.
+
+    Die Zeile wird von der Seed-Migration ac7556d5370e beim Migrieren
+    angelegt. Fehlt sie trotzdem, ist die Migration nicht sauber gelaufen
+    — das ist ein Datenkonsistenz-Bug, kein erwartbarer Zustand, deshalb
+    werfen wir hier einen sprechenden Fehler statt still eine Default-
+    Regel zu erfinden.
+    """
+    orm = session.query(FilterRulesORM).first()
+    if orm is None:
+        raise RuntimeError(
+            "filter_rules-Tabelle ist leer — die Seed-Migration "
+            "ac7556d5370e wurde nicht angewendet. Bitte "
+            "'alembic upgrade head' laufen lassen."
+        )
+    return FilterRules(
+        title_blacklist=orm.title_blacklist,
+        max_experience_years=orm.max_experience_years,
+        description_blacklist=orm.description_blacklist,
+    )
+
+
+def update_filter_rules(session: Session, rules: FilterRules) -> None:
+    """Aktualisiert die bestehende Singleton-Zeile.
+
+    Kein Insert-Fallback: die Zeile existiert seit der Seed-Migration
+    immer — würden wir hier ein Insert zulassen, entstünde bei einem
+    Bug (z.B. gelöschte Zeile) eine zweite parallele Zeile statt eines
+    lauten Fehlers.
+
+    Committet NICHT selbst — gleiche Konvention wie save_evaluated_job:
+    der Aufrufer (Route) entscheidet über die Transaktionsgrenze.
+    """
+    orm = session.query(FilterRulesORM).first()
+    if orm is None:
+        raise RuntimeError(
+            "filter_rules-Tabelle ist leer — die Seed-Migration "
+            "ac7556d5370e wurde nicht angewendet."
+        )
+    orm.title_blacklist = rules.title_blacklist
+    orm.max_experience_years = rules.max_experience_years
+    orm.description_blacklist = rules.description_blacklist
+
+
+# --- API-Queries (jobs + application_status) ------------------------------
+
+
+def list_jobs_with_status(
+    session: Session,
+    min_score: float,
+    status: str | None,
+    limit: int,
+    offset: int,
+) -> list[tuple[JobORM, str]]:
+    """Listet bewertete Jobs samt Status für die /jobs-API.
+
+    Query-Struktur:
+    - INNER JOIN mit EvaluationORM: jeder gelistete Job hat per Definition
+      eine Bewertung (Jobs ohne Evaluation existieren im Betrieb nicht,
+      aber der explizite JOIN garantiert das auch dann noch, wenn mal
+      ein halbfertiger Datensatz durchrutscht).
+    - LEFT OUTER JOIN mit ApplicationStatusORM: die Status-Zeile ist
+      optional (Variante A: nur explizit gesetzte Status haben eine
+      Zeile), Jobs ohne bekommen "neu" als Default.
+    - Filter fit_score >= min_score, optional status = ...
+    - Sortiert nach fit_score DESC — Consumer der API will meist die
+      besten Matches zuerst.
+
+    Der status-Filter greift NUR auf die Kind-Tabelle, nicht auf den
+    Default "neu". Ein Aufruf mit status="neu" gibt deshalb keine Jobs
+    zurück, die den Default tragen — bewusste Vereinfachung im ersten
+    Wurf, ausbaufähig wenn nötig.
+    """
+    query = (
+        session.query(JobORM, ApplicationStatusORM.status)
+        .join(EvaluationORM, EvaluationORM.job_id == JobORM.id)
+        .outerjoin(
+            ApplicationStatusORM, ApplicationStatusORM.job_id == JobORM.id
+        )
+        .filter(EvaluationORM.fit_score >= min_score)
+    )
+    if status is not None:
+        query = query.filter(ApplicationStatusORM.status == status)
+    query = query.order_by(EvaluationORM.fit_score.desc()).limit(limit).offset(offset)
+
+    # Fehlender application_status -> Default "neu" hier setzen, damit
+    # der Route-Code sich nicht mehr um None kümmern muss
+    return [
+        (job_orm, status_value if status_value is not None else "neu")
+        for job_orm, status_value in query.all()
+    ]
+
+
+def upsert_application_status(
+    session: Session, job_id: int, status: str
+) -> None:
+    """Legt einen Status an oder aktualisiert den bestehenden.
+
+    Wirft ValueError, wenn der referenzierte Job nicht existiert —
+    sonst würde ein Insert am FK-Constraint mit einer generischen
+    IntegrityError sterben. Sprechenderer Fehler = Route kann sauber
+    404 statt 500 zurückgeben.
+
+    Committet NICHT selbst.
+    """
+    # Existiert der Job überhaupt? Reine ID-Query, kein Full-Load
+    job_da = session.query(JobORM.id).filter_by(id=job_id).first()
+    if job_da is None:
+        raise ValueError(f"Job mit id={job_id} existiert nicht.")
+
+    bestehend = (
+        session.query(ApplicationStatusORM).filter_by(job_id=job_id).first()
+    )
+    if bestehend is None:
+        session.add(ApplicationStatusORM(job_id=job_id, status=status))
+    else:
+        bestehend.status = status

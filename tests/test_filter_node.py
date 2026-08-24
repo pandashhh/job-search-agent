@@ -1,11 +1,13 @@
 """Integrationstest für filter_node() aus src/agent/graph.py.
 
-load_filter_rules wird gepatcht, damit der Test nicht auf der echten
-data/filter_rules.yaml hängt — sonst würde eine Regeländerung dort
-diesen Test still zerstören.
+load_filter_rules wird gepatcht, damit der Test nicht auf einer echten
+DB-Zeile hängt — sonst würde eine Regeländerung in der Seed-Migration
+diesen Test still zerstören. Zusätzlich wird SessionLocal gepatcht, damit
+der Node keinen Verbindungsversuch startet (die Session wird ans gemockte
+load_filter_rules weitergereicht und danach geschlossen, mehr nicht).
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -60,8 +62,13 @@ async def test_filter_node_teilt_gemischte_liste_korrekt_auf() -> None:
     )
 
     # Patch am Import-Ort: filter_node greift auf den Namen zu, den es in
-    # graph.py importiert hat — nicht auf src.agent.filters.load_filter_rules
+    # graph.py importiert hat — nicht auf src.agent.filters.load_filter_rules.
+    # SessionLocal auf MagicMock, damit der Node keinen Verbindungsversuch
+    # startet (der Session-Wert wird ans gemockte load_filter_rules
+    # weitergereicht und danach geschlossen).
     with patch(
+        "src.agent.graph.SessionLocal", return_value=MagicMock()
+    ), patch(
         "src.agent.graph.load_filter_rules",
         return_value=fake_rules,
     ):
@@ -105,6 +112,8 @@ async def test_filter_node_leere_raw_jobs_liefert_leere_listen() -> None:
     )
 
     with patch(
+        "src.agent.graph.SessionLocal", return_value=MagicMock()
+    ), patch(
         "src.agent.graph.load_filter_rules",
         return_value=fake_rules,
     ):

@@ -100,8 +100,16 @@ async def filter_node(state: AgentState) -> dict:
     einem Fehler ohne Ergebnisse ankommen) — die Schleife läuft dann
     einfach nicht, beide Listen bleiben leer, kein Fehler.
     """
-    # Regeln einmal laden — später (M3) könnten hier DB-Regeln kommen
-    rules = load_filter_rules()
+    # Regeln aus der DB laden — YAML-Weg ist mit der Seed-Migration
+    # ac7556d5370e abgelöst. Die Session bleibt nur für den Load offen,
+    # danach schließen wir sie sofort: das eigentliche Filtern ist reine
+    # Python-Logik ohne DB-Zugriff, also gibt es keinen Grund, eine
+    # Verbindung über die Schleife zu halten.
+    session = SessionLocal()
+    try:
+        rules = await asyncio.to_thread(load_filter_rules, session)
+    finally:
+        session.close()
 
     filtered_jobs: list[Job] = []
     rejected_jobs: list[RejectedJob] = []
