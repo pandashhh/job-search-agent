@@ -7,6 +7,7 @@ In Produktion später über Gunicorn+uvicorn-Workers oder Cloud Run.
 """
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.routes import filter_rules, jobs, search_runs
 
@@ -16,6 +17,20 @@ app = FastAPI(
         "HTTP-API vor dem LangGraph-Agenten: Jobs listen, Filter-Regeln "
         "pflegen, Suchläufe starten."
     ),
+)
+
+# CORS: nötig, weil Frontend (Vite-Dev-Server auf Port 5173) und API
+# (uvicorn auf Port 8000) im Dev-Betrieb unterschiedliche Origins sind
+# — der Browser blockiert Cross-Origin-Requests sonst per Same-Origin-
+# Policy. In Produktion werden Frontend + API typischerweise hinter
+# demselben Origin ausgeliefert (Reverse Proxy), dann kann diese
+# Middleware raus oder auf die tatsächliche Prod-Domain restricted
+# werden.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Router in stabiler Reihenfolge einhängen — irrelevant für Routing,

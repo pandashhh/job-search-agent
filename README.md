@@ -96,6 +96,24 @@ Endpoints:
 
 OpenAPI-Doku unter `http://localhost:8000/docs` sobald der Server läuft.
 
+### Frontend starten
+
+React + TypeScript + Vite + Tailwind, im Ordner `frontend/`. Startet
+auf `http://localhost:5173` und erwartet das Backend parallel auf
+`http://localhost:8000` (CORS-Origin ist genau darauf eingestellt).
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Beim ersten Start sind die Dashboard-Karten leer — über den Tab
+"Neuer Suchlauf" den ersten Lauf anstoßen, danach zeigt der Tab "Jobs"
+die bewerteten Ergebnisse mit Fit-Score-Badge und Status-Dropdown.
+Der Tab "Filter-Regeln" liest/schreibt das Regelwerk direkt in die
+DB (Änderungen wirken beim nächsten Suchlauf).
+
 ### jobspy MCP-Server (Datenquelle)
 
 Eigener FastMCP-Server um die python-jobspy-Bibliothek (läuft als
