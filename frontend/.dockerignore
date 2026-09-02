@@ -1,0 +1,6 @@
+# Für den Frontend-Build-Kontext (Stage 1 aus frontend/Dockerfile).
+# node_modules würde npm ci sonst umsonst berechnen und einen Riesen-
+# Layer versenden; dist ist der Build-Output und wird IM Container
+# frisch erzeugt.
+node_modules/
+dist/

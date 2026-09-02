@@ -1,0 +1,83 @@
+# Lokaler Full-Stack-Compose: postgres + backend (FastAPI/LangGraph) + frontend (nginx).
+# `version:` bewusst weggelassen -- Compose v2 ignoriert es und warnt sogar davor.
+
+services:
+  # ------------------------------------------------------------
+  # Postgres mit pgvector -- gleiche Image-Version wie lokal + CI,
+  # damit Verhalten reproduzierbar bleibt.
+  # ------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      # Werte matchen die DATABASE_URL im backend-Service unten.
+      POSTGRES_DB: job_search_agent
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      # Benanntes Volume -- Daten überleben `docker-compose down` (nur
+      # `down -v` räumt sie explizit weg). So gehen lokal gesammelte
+      # Job-Bewertungen zwischen Neustarts nicht verloren.
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # Analog zu ci.yml -- backend soll erst starten, wenn Postgres
+      # wirklich Verbindungen annimmt (nicht nur "Container läuft").
+      test: ["CMD-SHELL", "pg_isready -U postgres -d job_search_agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ------------------------------------------------------------
+  # Backend: FastAPI-App + eingebetteter LangGraph-Agent.
+  # ------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    depends_on:
+      postgres:
+        # Auf den Healthcheck warten, sonst kann alembic upgrade head
+        # beim Start des Containers gegen einen noch nicht bereiten
+        # Postgres laufen und failen.
+        condition: service_healthy
+    # env_file statt COPY .env im Dockerfile: Secrets (Anthropic-Key,
+    # Langfuse-Keys) dürfen nie in ein Image gebrannt werden -- nur zur
+    # Laufzeit injiziert. So teilt das Image niemand versehentlich mit
+    # Credentials.
+    env_file:
+      - .env
+    environment:
+      # Überschreibt den DATABASE_URL-Wert aus .env: im Container-Netz
+      # heißt der DB-Host "postgres" (Service-Name), nicht "localhost".
+      # localhost würde auf den backend-Container selbst zeigen und
+      # scheitern.
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/job_search_agent
+    volumes:
+      # Bind-Mount für data/profile.yaml -- die Datei bleibt außerhalb
+      # des Images (persönliche Daten, wie in Dockerfile.backend erklärt),
+      # steht aber im Container unter /app/data/profile.yaml zur
+      # Verfügung. :ro macht sie im Container schreibgeschützt.
+      - ./data/profile.yaml:/app/data/profile.yaml:ro
+    ports:
+      # Host:Container -- FastAPI weiterhin unter http://localhost:8000.
+      - "8000:8000"
+
+  # ------------------------------------------------------------
+  # Frontend: statische Vite-Build-Assets, ausgeliefert von nginx.
+  # ------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      # Nur harte Reihenfolge (nicht: "wartet auf gesund") -- der
+      # Frontend-Build braucht das Backend nicht zur Compile-Zeit, aber
+      # ein User erwartet, dass beides zusammen hochkommt.
+      - backend
+    ports:
+      # Host-Port 5173 bleibt gewohnt (wie beim `npm run dev`),
+      # intern lauscht nginx auf 80.
+      - "5173:80"
+
+volumes:
+  # Benanntes Volume für Postgres. Ohne Config-Block bleibt es beim
+  # Default-Docker-Volume-Driver -- reicht für lokale Entwicklung.
+  postgres_data:

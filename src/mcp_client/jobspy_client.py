@@ -9,12 +9,15 @@ des aufrufenden Nodes, damit dieses Modul unabhängig vom Graph-State bleibt.
 """
 
 import json
+import sys
 from pathlib import Path
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-# Projekt-Root: drei Ebenen über dieser Datei (src/mcp_client/ → Projekt-Root)
+# Projekt-Root: drei Ebenen über dieser Datei (src/mcp_client/ → Projekt-Root).
+# Wird weiterhin für den args-Pfad zu server.py gebraucht — der ist immer
+# relativ zum Repo-Layout, egal wo der Interpreter herkommt.
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
@@ -46,9 +49,14 @@ async def search_jobs_via_mcp(
     if site_names is None:
         site_names = ["indeed"]
 
-    # StdioServerParameters: beschreibt nur den Startbefehl, startet noch keinen Prozess
+    # StdioServerParameters: beschreibt nur den Startbefehl, startet noch keinen Prozess.
+    # command=sys.executable statt hartkodiertem venv-Pfad — funktioniert
+    # unabhängig von venv/Docker/Cloud Run, weil sys.executable immer auf
+    # den aktuell laufenden Python-Interpreter zeigt (im Container ist das
+    # /usr/local/bin/python, lokal der venv-Interpreter, in Cloud Run der
+    # der Base-Image-Python).
     server_params = StdioServerParameters(
-        command=str(_PROJECT_ROOT / "venv" / "bin" / "python"),
+        command=sys.executable,
         args=[str(_PROJECT_ROOT / "mcp_servers" / "jobspy_server" / "server.py")],
         # cwd zur Sicherheit explizit gesetzt, auch wenn hier nicht zwingend nötig
         cwd=str(_PROJECT_ROOT),
