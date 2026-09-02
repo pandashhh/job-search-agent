@@ -62,6 +62,10 @@ source venv/bin/activate
 pip install -r requirements.txt
 pip install -r requirements-dev.txt  # nur für Entwicklung/Tests
 alembic upgrade head  # wendet alle Migrationen an und bringt die DB auf den aktuellen Schema-Stand
+# Separate Test-DB anlegen — pytest räumt am Ende jeder Session per
+# drop_all() ALLE Tabellen weg; ohne eigene DB würden dabei wiederholt
+# die Dev-Bewertungen mit verloren gehen (siehe #38).
+createdb job_search_agent_test && psql job_search_agent_test -c 'CREATE EXTENSION vector;'
 ```
 
 Die Initial-Migration versucht `CREATE EXTENSION IF NOT EXISTS vector`

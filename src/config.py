@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     # aus der Umgebung überschrieben.
     database_url: str = "postgresql://localhost/job_search_agent"
 
+    # Separate DB für die Testsuite. Grund: pytest räumt über die
+    # db_engine-Fixture am Ende jedes Sessions per Base.metadata.drop_all()
+    # ALLE Tabellen der genutzten DB weg. Zeigt das auf die Dev-DB
+    # (database_url), sind wir jedes Mal die lokalen Bewertungen los —
+    # siehe #38, dreimal in Folge nach Runs zu #14 und #17 aufgetreten.
+    # Eigene DB "..._test" bricht diese Kollision strukturell auf.
+    test_database_url: str = "postgresql://localhost/job_search_agent_test"
+
     # Langfuse-Tracing (optional). Alle drei Felder dürfen None/Default
     # bleiben — src/observability.py prüft, ob public_key UND secret_key
     # gesetzt sind, und deaktiviert das Tracing sauber, wenn nicht. So

@@ -68,7 +68,13 @@ jobs:
       # Testsuite ausführen; -v zeigt jeden Testnamen einzeln im Log.
       # DATABASE_URL überschreibt den Default aus config.py und zeigt auf
       # den Service-Container (Standard-Port 5432 wurde oben gemappt).
+      # TEST_DATABASE_URL zeigt lokal auf eine separate DB (siehe #38),
+      # in CI aber auf DIESELBE wie DATABASE_URL: der Service-Container
+      # ist pro Lauf frisch und isoliert, die Dev/Test-Kollision gibt es
+      # hier strukturell nicht. Die Variable muss trotzdem gesetzt sein,
+      # weil Settings sie inzwischen erwartet.
       - name: Tests ausführen
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/job_search_agent
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/job_search_agent
         run: pytest tests/ -v
