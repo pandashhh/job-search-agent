@@ -40,3 +40,11 @@ sentence-transformers>=3.0.0
 # für spürbar bessere Performance mit rein.
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
+
+# Tracing/Observability für die LangGraph-Pipeline. Läuft nur, wenn in
+# .env auch die drei LANGFUSE_*-Variablen gesetzt sind — ohne Keys ist
+# das Feature komplett deaktiviert (Zusatzfeature, kein Pflichtbestandteil).
+# langchain wird von langfuse.langchain.CallbackHandler beim Import
+# verlangt (harter ImportError sonst) — nicht nur langchain-core reicht.
+langfuse>=3.0.0
+langchain>=1.0.0

@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     # aus der Umgebung überschrieben.
     database_url: str = "postgresql://localhost/job_search_agent"
 
+    # Langfuse-Tracing (optional). Alle drei Felder dürfen None/Default
+    # bleiben — src/observability.py prüft, ob public_key UND secret_key
+    # gesetzt sind, und deaktiviert das Tracing sauber, wenn nicht. So
+    # kann das Projekt auch ohne Langfuse-Account laufen (Zusatzfeature,
+    # kein Pflichtbestandteil).
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_host: str = "https://cloud.langfuse.com"
+
     # Pydantic-v2-Stil: model_config als Klassenattribut statt verschachtelter
     # class Config. SettingsConfigDict ist der spezialisierte TypedDict-Wrapper
     # von pydantic-settings (statt des generischen ConfigDict aus pydantic).

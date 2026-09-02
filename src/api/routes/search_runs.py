@@ -17,6 +17,7 @@ from fastapi import APIRouter
 
 from src.agent.graph import build_graph
 from src.api.schemas import SearchRunRequest, SearchRunResponse
+from src.observability import flush_langfuse, get_langfuse_handler
 
 router = APIRouter(prefix="/search-runs", tags=["search-runs"])
 
@@ -25,6 +26,12 @@ router = APIRouter(prefix="/search-runs", tags=["search-runs"])
 async def start_search_run(payload: SearchRunRequest) -> SearchRunResponse:
     """Kompiliert den Graphen und lässt ihn synchron durchlaufen."""
     graph = build_graph()
+
+    # Tracing-Handler holen. Falls Langfuse in .env nicht konfiguriert
+    # ist, liefert get_langfuse_handler() None — dann übergeben wir ein
+    # leeres config-Dict, LangGraph läuft völlig unverändert.
+    handler = get_langfuse_handler()
+    config = {"callbacks": [handler]} if handler else {}
 
     # Vollständiger Initial-State: alle List-Keys müssen vorhanden sein,
     # sonst wirft LangGraph beim ersten Zugriff KeyError
@@ -37,8 +44,14 @@ async def start_search_run(payload: SearchRunRequest) -> SearchRunResponse:
             "rejected_jobs": [],
             "evaluated_jobs": [],
             "errors": [],
-        }
+        },
+        config=config,
     )
+
+    # flush() vor dem return: Langfuse puffert Events asynchron, ohne
+    # expliziten Flush kann der HTTP-Request enden, bevor die letzten
+    # Traces raus sind. flush_langfuse() ist No-op ohne aktiviertes Tracing.
+    flush_langfuse()
 
     return SearchRunResponse(
         raw_jobs_count=len(ergebnis["raw_jobs"]),

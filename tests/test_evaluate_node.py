@@ -114,7 +114,10 @@ async def test_evaluate_node_bewertet_alle_gefilterten_jobs() -> None:
     with patch("src.agent.graph.ChatAnthropic", chat_mock), patch(
         "src.agent.graph.load_profile", return_value=_dummy_profile()
     ):
-        result = await evaluate_node(_base_state(jobs))
+        # Leeres config-Dict reicht — LangGraph würde in Produktion den
+        # echten RunnableConfig injizieren, für den Node-Test spielt sein
+        # Inhalt keine Rolle.
+        result = await evaluate_node(_base_state(jobs), {})
 
     evaluated: list[EvaluatedJob] = result["evaluated_jobs"]
     assert len(evaluated) == 2
@@ -145,7 +148,7 @@ async def test_evaluate_node_leere_liste_macht_keinen_api_call() -> None:
     with patch("src.agent.graph.ChatAnthropic", chat_mock), patch(
         "src.agent.graph.load_profile", return_value=_dummy_profile()
     ):
-        result = await evaluate_node(_base_state([]))
+        result = await evaluate_node(_base_state([]), {})
 
     # Leer, damit dedup_node-Einträge im State erhalten bleiben (siehe Docstring)
     assert result == {}
@@ -175,7 +178,7 @@ async def test_evaluate_node_ueberspringt_kaputter_job_und_verarbeitet_rest() ->
     with patch("src.agent.graph.ChatAnthropic", chat_mock), patch(
         "src.agent.graph.load_profile", return_value=_dummy_profile()
     ):
-        result = await evaluate_node(_base_state(jobs))
+        result = await evaluate_node(_base_state(jobs), {})
 
     evaluated: list[EvaluatedJob] = result["evaluated_jobs"]
     # Nur der zweite Job kommt durch

@@ -13,6 +13,7 @@ evaluated_jobs übernommen; nur wirklich neue Jobs erreichen evaluate.
 import asyncio
 
 from langchain_anthropic import ChatAnthropic
+from langchain_core.runnables import RunnableConfig
 from langgraph.constants import END, START
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -184,7 +185,7 @@ async def dedup_node(state: AgentState) -> dict:
     }
 
 
-async def evaluate_node(state: AgentState) -> dict:
+async def evaluate_node(state: AgentState, config: RunnableConfig) -> dict:
     """Bewertet jeden gefilterten Job via Claude Haiku (Structured Output).
 
     Ablauf:
@@ -201,6 +202,13 @@ async def evaluate_node(state: AgentState) -> dict:
     überschreibt nicht. Grund: dedup_node befüllt evaluated_jobs bereits
     mit rekonstruierten bekannten Jobs — würden wir überschreiben, gingen
     diese Einträge verloren.
+
+    config: LangGraph befüllt diesen Parameter automatisch mit dem beim
+    graph.ainvoke() übergebenen Callback-Kontext — Node-Funktionen, die
+    diesen Parameter deklarieren, bekommen ihn injiziert, ohne dass der
+    Aufrufer etwas Zusätzliches tun muss. Wir reichen ihn unten an
+    chain.ainvoke() weiter, damit der Langfuse-Handler den Anthropic-Call
+    als Sub-Span dieses Node-Spans mittrackt.
     """
     # Kurzschluss: keine neuen Jobs -> keine neuen Bewertungen, State
     # bleibt wie er ist (dedup_node kann evaluated_jobs gefüllt haben)
@@ -237,11 +245,16 @@ async def evaluate_node(state: AgentState) -> dict:
         )
 
         try:
+            # config=config nur HIER nötig: die anderen vier Nodes rufen
+            # keine eigenen LangChain-Runnables auf, ihre Node-Dauer/
+            # Input/Output wird bereits automatisch getrackt, sobald der
+            # Callback beim äußeren graph.ainvoke() registriert ist.
             evaluation = await chain.ainvoke(
                 [
                     ("system", system_prompt),
                     ("human", user_message),
-                ]
+                ],
+                config=config,
             )
             neue_bewertungen.append(EvaluatedJob(job=job, evaluation=evaluation))
         except Exception as e:
