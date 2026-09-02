@@ -1,0 +1,29 @@
+# Was NICHT in den Backend-Build-Kontext geschickt wird.
+# Docker sendet sonst das komplette Projekt an den Daemon -- unnötig
+# groß und langsam, und Secrets könnten versehentlich ins Image landen.
+
+# Python-Laufzeit-Kram
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+
+# Git-Historie -- riesig, im Image nutzlos
+.git/
+.gitignore
+
+# Secrets & persönliche Daten -- niemals ins Image (siehe env_file /
+# Bind-Mount in docker-compose.yml und Kommentar in Dockerfile.backend)
+.env
+data/profile.yaml
+data/results/
+
+# Frontend gehört in seinen eigenen Build-Kontext (frontend/Dockerfile),
+# nicht ins Backend-Image
+frontend/node_modules/
+frontend/dist/
+
+# Tests laufen nicht im produktiven Container -- kein Grund sie
+# reinzukopieren
+tests/

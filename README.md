@@ -132,6 +132,37 @@ Manueller Verbindungstest mit einer echten Suchanfrage:
 python tests/manual/jobspy_client_check.py
 ```
 
+## Mit Docker starten
+
+Der komplette Stack (Postgres + Backend + Frontend) läuft über
+`docker-compose` in drei Containern:
+
+```bash
+docker-compose up --build
+```
+
+- Frontend: http://localhost:5173 (nginx serviert die Vite-Assets)
+- Backend/API: http://localhost:8000 (OpenAPI-Doku unter `/docs`)
+- Postgres: läuft im internen Docker-Netz, Daten in benanntem Volume
+  `postgres_data` (überleben `down`, verschwinden erst bei `down -v`)
+
+Voraussetzungen vor dem ersten Start:
+1. `.env` mit `ANTHROPIC_API_KEY` (und optional den `LANGFUSE_*`-Keys)
+   im Projekt-Root — wird über `env_file` in den Backend-Container
+   injiziert, landet nie im Image.
+2. `data/profile.yaml` lokal vorhanden — die Datei wird bewusst NICHT
+   ins Image kopiert (persönliche Daten), sondern read-only als
+   Bind-Mount unter `/app/data/profile.yaml` in den Container gehängt.
+   Vorlage:
+
+```bash
+cp data/profile.example.yaml data/profile.yaml
+# danach data/profile.yaml mit den eigenen Werten füllen
+```
+
+Alembic-Migrationen laufen beim Backend-Start automatisch
+(`alembic upgrade head` im CMD).
+
 ## Monitoring mit Langfuse
 
 Der Agent trägt optionales Tracing via [Langfuse](https://langfuse.com)

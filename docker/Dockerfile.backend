@@ -1,0 +1,83 @@
+# syntax=docker/dockerfile:1.7
+
+# ============================================================
+# Backend-Image: FastAPI + LangGraph-Agent + jobspy-MCP-Server
+# ============================================================
+#
+# Multi-Stage-Build, gleiche Idee wie in anthropic-docs-rag: der Build-
+# Kram (Compiler, Header, pip-Cache, Wheel-Zwischenprodukte) bleibt im
+# "builder"-Stage, das finale "runtime"-Image bekommt nur das fertige
+# venv + Anwendungscode. Erfahrung dort: 9 GB → 2 GB.
+#
+# python:3.11-slim (Debian) statt Alpine: psycopg2 und
+# sentence-transformers/torch kompilieren auf Alpine erfahrungsgemäß
+# fehleranfällig (musl vs. glibc, keine offiziellen Wheels für Alpine).
+# Debian-slim ist etwas größer, aber komplett problemlos.
+
+# ---------- Stage 1: builder ----------
+FROM python:3.11-slim AS builder
+
+# Kein pyc-Ballast, kein Buffering im Build-Log — kleiner + lesbarer.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Build-Deps: für die meisten Wheels reichen die Standard-Slim-Tools,
+# aber psycopg2 (falls kein Wheel greift) und torch brauchen gcc.
+# Nach dem pip install werden diese Layer NICHT nach runtime übernommen.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Eigenes venv in /opt/venv — sauber isoliert, leicht in Stage 2 zu kopieren.
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# requirements zuerst — Docker-Layer-Cache trifft, solange sich die
+# Datei nicht ändert. Anwendungscode kommt erst in Stage 2 rein.
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --upgrade pip \
+    && pip install -r /tmp/requirements.txt
+
+# ---------- Stage 2: runtime ----------
+FROM python:3.11-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH"
+
+# Runtime-Deps: libpq5 für psycopg2 zur Laufzeit (nicht libpq-dev,
+# das wäre wieder Build-Header). Kein gcc, kein build-essential.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Fertiges venv aus Stage 1 — enthält alle Python-Pakete, keine Header,
+# keine Compiler-Reste.
+COPY --from=builder /opt/venv /opt/venv
+
+WORKDIR /app
+
+# Anwendungscode. data/profile.yaml wird BEWUSST NICHT reinkopiert
+# (persönliche Daten, ähnlich wie .env). Für docker-compose lokal per
+# read-only Bind-Mount eingehängt (siehe docker-compose.yml), fürs
+# echte Deployment in M6/#19 als Secret injiziert. data/profile.example.yaml
+# kommt als Vorlage mit ins Image, damit ein User im Container jederzeit
+# sieht, welche Felder gebraucht werden.
+COPY src/ ./src/
+COPY mcp_servers/ ./mcp_servers/
+COPY alembic/ ./alembic/
+COPY alembic.ini ./alembic.ini
+COPY data/filter_rules.yaml ./data/filter_rules.yaml
+COPY data/profile.example.yaml ./data/profile.example.yaml
+
+# FastAPI-Standardport (matcht docker-compose + Cloud Run).
+EXPOSE 8000
+
+# Shell-Form, damit && funktioniert: erst Migrationen anwenden, dann Server.
+# alembic upgrade head ist idempotent — bei jedem Container-Start OK.
+# --host 0.0.0.0 zwingend, sonst bindet uvicorn nur an loopback INNERHALB
+# des Containers und ist von außen nicht erreichbar.
+CMD alembic upgrade head && uvicorn src.api.main:app --host 0.0.0.0 --port 8000
