@@ -46,20 +46,30 @@ def set_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(scope="session")
 def db_engine() -> Engine:
-    """Erstellt eine SQLAlchemy-Engine gegen settings.database_url und
-    legt alle Tabellen an. scope='session' -> genau einmal pro pytest-Lauf.
+    """Erstellt eine SQLAlchemy-Engine gegen settings.test_database_url
+    (bewusst NICHT database_url) und legt alle Tabellen an.
+    scope='session' -> genau einmal pro pytest-Lauf.
 
-    Am Ende (nach yield): alle Tabellen wieder droppen, damit derselbe
-    lokale DB-Server für andere Zwecke nicht mit Test-Tabellen verschmutzt
-    zurückbleibt.
+    Am Ende (nach yield): drop_all() räumt alle Tabellen weg. Genau dieser
+    drop_all() hat wiederholt die lokale Dev-DB leergemacht (siehe #38),
+    solange Fixture und Dev-App auf dieselbe DB zeigten. Deshalb hier
+    strikt eine dedizierte Test-DB — komplett getrennt von der DB, die
+    settings.database_url referenziert.
 
-    Voraussetzung: die pgvector-Extension muss in der Ziel-DB bereits
-    aktiviert sein (Base.metadata.create_all kann sie nicht selbst
-    anlegen, das braucht Superuser). Lokal einmalig via
-    `CREATE EXTENSION IF NOT EXISTS vector;` in psql, in CI ist das ein
-    eigener Step in ci.yml.
+    Die pgvector-Extension wird vor create_all() idempotent angelegt
+    (CREATE EXTENSION IF NOT EXISTS vector) — dasselbe Prinzip wie in
+    der Alembic-Initial-Migration aus #13. Vorteil: eine frisch per
+    `createdb job_search_agent_test` angelegte Datenbank funktioniert
+    ohne separaten psql-Schritt. Voraussetzung ist, dass der verbundene
+    Rollen-User die Extension überhaupt anlegen darf; lokal (peer-Auth
+    mit Superuser) und in CI (Service-User "postgres") ist das gegeben.
     """
-    engine = create_engine(settings.database_url)
+    engine = create_engine(settings.test_database_url)
+    # Extension vor create_all, sonst schlägt der Vector-Spaltentyp
+    # beim Anlegen der jobs-Tabelle mit "type vector does not exist" fehl.
+    # begin() öffnet eine Transaktion und committet automatisch am Ende.
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     Base.metadata.create_all(engine)
     yield engine
     Base.metadata.drop_all(engine)
