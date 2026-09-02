@@ -25,12 +25,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.agent.graph import build_graph
+from src.observability import flush_langfuse, get_langfuse_handler
 
 
 async def main() -> None:
     # Graph einmal bauen — build_graph() ist synchron, kompiliert die
     # StateGraph zu einem ausführbaren Graphen
     graph = build_graph()
+
+    # Tracing-Handler holen (None, falls Langfuse nicht konfiguriert ist —
+    # dann läuft der Check wie bisher, nur ohne Traces).
+    handler = get_langfuse_handler()
+    config = {"callbacks": [handler]} if handler else {}
 
     # Vollständiger Initial-State: alle Listen leer, Suchparameter gesetzt.
     # LangGraph erwartet, dass ALLE TypedDict-Keys vorhanden sind (auch
@@ -46,7 +52,7 @@ async def main() -> None:
     }
 
     print("Starte kompletten Agenten-Lauf (echter MCP + echte Anthropic-API)...\n")
-    result = await graph.ainvoke(initial_state)
+    result = await graph.ainvoke(initial_state, config=config)
 
     # --- Kompakte Übersicht ---
     # Zahlen zuerst, damit man auf einen Blick sieht, wo der Trichter greift
@@ -88,6 +94,10 @@ async def main() -> None:
             )
             # Reasoning eingerückt, damit die Zuordnung zum Job klar bleibt
             print(f"      {evaluated.evaluation.reasoning}")
+
+    # Traces vor Prozess-Ende rausschicken — sonst gehen die letzten
+    # gepufferten Events verloren, weil Langfuse asynchron sendet.
+    flush_langfuse()
 
 
 if __name__ == "__main__":

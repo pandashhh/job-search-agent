@@ -127,3 +127,29 @@ Manueller Verbindungstest mit einer echten Suchanfrage:
 ```bash
 python tests/manual/jobspy_client_check.py
 ```
+
+## Monitoring mit Langfuse
+
+Der Agent trägt optionales Tracing via [Langfuse](https://langfuse.com)
+mit — jeder LangGraph-Lauf erscheint als Trace mit Sub-Spans für Search-,
+Filter-, Dedup-, Evaluate- und Store-Node inkl. Token-Verbrauch und
+Latenz des Anthropic-Calls.
+
+**Tracing ist optional.** Ohne die drei Variablen unten läuft das
+Projekt völlig normal — nur ohne Traces.
+
+Einrichtung:
+1. Kostenlosen Account auf [cloud.langfuse.com](https://cloud.langfuse.com)
+   anlegen und ein Projekt erstellen.
+2. Public- und Secret-Key aus den Projekt-Settings kopieren.
+3. In `.env` ergänzen:
+
+```env
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_HOST=https://cloud.langfuse.com
+```
+
+Beim nächsten Suchlauf (`POST /search-runs` oder
+`python tests/manual/full_agent_run_check.py`) erscheinen die Traces
+im Langfuse-Dashboard.
